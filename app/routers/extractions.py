@@ -26,16 +26,16 @@ from app.models import (
     Extraction,
     ExtractionJobType,
     ExtractionStatus,
-    Template,
+    Template, BatchKind,
 )
+from app.schemas.batch import BatchCreatedResponse, BatchJobItem
 from app.schemas.common import PaginatedResponse
 from app.schemas.extraction import (
-    ExtractionAccepted,
-    ExtractionCreateRequest,
     ExtractionListItem,
     ExtractionOut,
-    ExtractionResultField, ExtractionPatchRequest,
+    ExtractionResultField, ExtractionPatchRequest, ExtractionBatchCreateRequest,
 )
+from app.services.batch_service import create_batch
 from app.services.extraction_edit import apply_field_edits
 from app.services.extraction_export import export_extraction
 from app.tasks.extraction_tasks import run_extraction
@@ -50,10 +50,10 @@ router = APIRouter(prefix="/extractions", tags=["Extractions"])
 # =========================================================
 
 # File types that route through the image pipeline (vision model).
-IMAGE_FILE_TYPES = {"jpg", "jpeg", "png", "webp"}
+IMAGE_TYPES = {"jpg", "jpeg", "png", "webp"}
 
 # File types that route through the document pipeline (extract + structure).
-DOCUMENT_FILE_TYPES = {"pdf", "docx", "txt", "doc"}
+DOCUMENT_TYPES = {"pdf", "docx", "txt"}
 
 
 # =========================================================
@@ -62,15 +62,15 @@ DOCUMENT_FILE_TYPES = {"pdf", "docx", "txt", "doc"}
 
 @router.post(
     "",
-    response_model=ExtractionAccepted,
+    response_model=BatchCreatedResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-async def create_extraction(
-        data: ExtractionCreateRequest,
-        user: CurrentUser = Depends(current_user),
-        db: AsyncSession = Depends(get_db),
-) -> ExtractionAccepted:
-    # --- validate template ---------------------------------------
+async def create_extraction_batch(
+    data: ExtractionBatchCreateRequest,
+    user: CurrentUser = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BatchCreatedResponse:
+    # --- validate template ----------------------------------------
     template = await db.scalar(
         select(Template).where(
             Template.id == data.template_id,
@@ -80,43 +80,92 @@ async def create_extraction(
     if not template:
         raise HTTPException(400, f"Unknown template_id: {data.template_id}")
 
-    # --- validate file_type --------------------------------------
-    file_type = data.file_type.lower().lstrip(".")
-    if file_type in IMAGE_FILE_TYPES:
-        ocr_job_type = ExtractionJobType.IMAGE
-    elif file_type in DOCUMENT_FILE_TYPES:
-        ocr_job_type = ExtractionJobType.DOCUMENT
-    else:
+    # --- classify file types + enforce family consistency ---------
+    doc_files: list = []
+    img_files: list = []
+    invalid: list[str] = []
+
+    for f in data.files:
+        ft = f.file_type.lower().lstrip(".")
+        if ft in DOCUMENT_TYPES:
+            doc_files.append(f)
+        elif ft in IMAGE_TYPES:
+            img_files.append(f)
+        else:
+            invalid.append(f.file_name)
+
+    if invalid:
         raise HTTPException(
-            400,
-            f"Unsupported file_type: {data.file_type}. "
-            f"Allowed: {sorted(IMAGE_FILE_TYPES | DOCUMENT_FILE_TYPES)}",
+            status.HTTP_400_BAD_REQUEST,
+            f"Unsupported file type(s): {invalid}. "
+            f"Allowed documents: {sorted(DOCUMENT_TYPES)}, "
+            f"images: {sorted(IMAGE_TYPES)}.",
         )
 
-    # --- create the row ------------------------------------------
-    extraction = Extraction(
-        id=str(uuid.uuid4()),
-        batch_id=data.batch_id,
+    if doc_files and img_files:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Cannot mix document and image files in one extraction batch. "
+            f"Split into two batches — one with documents ({len(doc_files)} files), "
+            f"one with images ({len(img_files)} files).",
+        )
+
+    # --- determine job type --------------------------------------
+    if doc_files:
+        ocr_job_type = ExtractionJobType.DOCUMENT
+        family_files = doc_files
+    else:
+        ocr_job_type = ExtractionJobType.IMAGE
+        family_files = img_files
+
+    # --- create batch ---------------------------------------------
+    batch = await create_batch(
+        db,
         admin_id=user.admin_id,
         user_id=user.id,
+        kind=BatchKind.EXTRACTION,
         template_id=template.id,
-        template_version="v1",
-        file_name=data.file_name,
-        file_url=data.file_url,
-        file_type=file_type,
-        ocr_job_type=ocr_job_type,
-        status=ExtractionStatus.PENDING,
-        review_needed=False,
+        total_files=len(family_files),
+        label=data.label,
     )
-    db.add(extraction)
-    await db.flush()
 
-    # --- dispatch ------------------------------------------------
-    run_extraction.apply_async(args=[extraction.id])
+    # --- create one extraction per file --------------------------
+    jobs: list[BatchJobItem] = []
+    extraction_ids: list[str] = []
 
-    return ExtractionAccepted(
-        extraction_id=extraction.id,
-        extraction_status=extraction.status.value,
+    for file_input in family_files:
+        extraction = Extraction(
+            id=str(uuid.uuid4()),
+            batch_id=batch.id,
+            admin_id=user.admin_id,
+            user_id=user.id,
+            template_id=template.id,
+            template_version="v1",
+            file_name=file_input.file_name,
+            file_url=file_input.url,
+            file_type=file_input.file_type.lower().lstrip("."),
+            ocr_job_type=ocr_job_type,
+            status=ExtractionStatus.PENDING,
+            review_needed=False,
+        )
+        db.add(extraction)
+        await db.flush()
+
+        jobs.append(BatchJobItem(
+            id=extraction.id,
+            file_name=extraction.file_name,
+            status=extraction.status.value,
+        ))
+        extraction_ids.append(extraction.id)
+
+    # --- dispatch -------------------------------------------------
+    for extraction_id in extraction_ids:
+        run_extraction.apply_async(args=[extraction_id])
+
+    return BatchCreatedResponse(
+        batch_id=batch.id,
+        total_files=len(jobs),
+        jobs=jobs,
     )
 
 

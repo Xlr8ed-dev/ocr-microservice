@@ -13,6 +13,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.batch import FileInput
+
 
 # =========================================================
 # RESULT SHAPE (per field)
@@ -37,37 +39,31 @@ class ExtractionResultField(BaseModel):
 # CREATE REQUEST
 # =========================================================
 
-class ExtractionCreateRequest(BaseModel):
-    """Create a single-file extraction.
+class ExtractionBatchCreateRequest(BaseModel):
+    """Create a batch of template extractions. 1 to 30 files.
 
-    The file has already been uploaded to S3 (or equivalent) by the FE.
-    We just need the URL and metadata to know how to process it.
+    All files in one extraction batch must share the same file-family
+    (all document types OR all image types). Mixed PDF + JPG in one
+    batch is rejected — the template needs a consistent processing path.
     """
-
     template_id: str = Field(..., description="Template id from GET /templates")
-    file_url: str = Field(..., description="S3 (or similar) URL of the uploaded file")
-    file_name: str = Field(..., description="Original filename, for display")
-    file_type: str = Field(
+    files: list[FileInput] = Field(
         ...,
-        description="One of: pdf | docx | txt | jpg | jpeg | png | webp",
+        min_length=1,
+        max_length=30,
     )
-
-    # Optional: group multiple files under a batch (Phase C will populate this)
-    batch_id: str | None = Field(
-        default=None,
-        description="Optional batch id, if the FE is uploading multiple files at once",
-    )
+    label: str | None = Field(default=None, max_length=255)
 
 
 # =========================================================
 # ACCEPTED (202 response)
 # =========================================================
 
-class ExtractionAccepted(BaseModel):
-    status: str = "success"
-    extraction_id: str
-    extraction_status: str
-    message: str | None = None
+# class ExtractionAccepted(BaseModel):
+#     status: str = "success"
+#     extraction_id: str
+#     extraction_status: str
+#     message: str | None = None
 
 
 # =========================================================

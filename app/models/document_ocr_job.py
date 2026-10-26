@@ -4,6 +4,7 @@ from enum import Enum
 from sqlalchemy import (
     DateTime,
     Enum as SAEnum,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -14,80 +15,75 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.models.enum_helpers import _enum_values
 
-
-# =========================================================
-# ENUMS
-# =========================================================
 
 class DocumentFileType(str, Enum):
-    PDF_TEXT = "pdf_text"  # PDF with a selectable text layer
-    PDF_SCAN = "pdf_scan"  # PDF that is a stack of page images
+    PDF_TEXT = "pdf_text"
+    PDF_SCAN = "pdf_scan"
     DOCX = "docx"
-    # DOC = "doc"  # legacy .doc
     TXT = "txt"
 
 
 class DocumentOCRStatus(str, Enum):
     PENDING = "pending"
-    EXTRACTING = "extracting"  # downloading + text extraction + heading detection
-    STRUCTURING = "structuring"  # AI chunk processing
+    EXTRACTING = "extracting"
+    STRUCTURING = "structuring"
     COMPLETED = "completed"
     FAILED = "failed"
 
-
-# =========================================================
-# MODEL
-# =========================================================
 
 class DocumentOCRJob(Base):
     __tablename__ = "document_ocr_jobs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-
-    # --- identity -------------------------------------------------
     job_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    batch_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("batches.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
 
     admin_id: Mapped[int] = mapped_column(Integer, index=True)
     user_id: Mapped[int] = mapped_column(Integer)
 
-    # --- input ----------------------------------------------------
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     file_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     file_type: Mapped[DocumentFileType] = mapped_column(
-        SAEnum(DocumentFileType, name="document_file_type"),
+        SAEnum(
+            DocumentFileType,
+            name="document_file_type",
+            values_callable=_enum_values,
+        ),
         nullable=False,
         index=True,
     )
     file_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    # --- processing state ----------------------------------------
     status: Mapped[DocumentOCRStatus] = mapped_column(
-        SAEnum(DocumentOCRStatus, name="document_ocr_status"),
+        SAEnum(
+            DocumentOCRStatus,
+            name="document_ocr_status",
+            values_callable=_enum_values,
+        ),
         default=DocumentOCRStatus.PENDING,
         index=True,
     )
-    progress: Mapped[int] = mapped_column(Integer, default=0)  # 0..100
+    progress: Mapped[int] = mapped_column(Integer, default=0)
 
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     chunk_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     ai_calls: Mapped[int] = mapped_column(Integer, default=0)
     ai_tokens_in: Mapped[int] = mapped_column(Integer, default=0)
     ai_tokens_out: Mapped[int] = mapped_column(Integer, default=0)
 
-    # --- output ---------------------------------------------------
-    # Shape: { title, blocks: [...], metadata: {...} }
     output: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-
-    # Raw AI responses per chunk, for debugging. Prune after N days.
     raw_chunks: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # --- cost (for future billing at ₹1/page) ---------------------
     cost_estimate: Mapped[float | None] = mapped_column(nullable=True)
 
-    # --- timestamps ----------------------------------------------
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )

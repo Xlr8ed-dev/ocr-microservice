@@ -12,16 +12,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import CurrentUser, current_user
-from app.models import ImageOCRJob, ImageOCRStatus, ImageOCRType
+from app.models import ImageOCRJob, ImageOCRStatus, ImageOCRType, BatchKind
+from app.schemas.batch import BatchCreatedResponse, BatchJobItem
 from app.schemas.common import PaginatedResponse
 from app.schemas.image import (
-    ImageAccepted,
-    ImageCreateRequest,
     ImageJobOut,
     ImageListOut,
     ImageTypeInfo,
-    ImageTypeListOut,
+    ImageTypeListOut, ImageBatchCreateRequest,
 )
+from app.services.batch_service import create_batch
 from app.services.image_prompts import IMAGE_TYPE_META
 from app.tasks.image_tasks import run_image_ocr
 from app.utils.pagination import DEFAULT_PAGE_SIZE, build_meta, parse_page
@@ -47,6 +47,7 @@ async def list_image_types() -> ImageTypeListOut:
         ],
     )
 
+ALLOWED_IMAGE_TYPES = {"jpg", "jpeg", "png", "webp"}
 
 # =========================================================
 # CREATE
@@ -54,39 +55,80 @@ async def list_image_types() -> ImageTypeListOut:
 
 @router.post(
     "",
-    response_model=ImageAccepted,
+    response_model=BatchCreatedResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-async def create_image_job(
-        data: ImageCreateRequest,
-        user: CurrentUser = Depends(current_user),
-        db: AsyncSession = Depends(get_db),
-) -> ImageAccepted:
+async def create_image_batch(
+    data: ImageBatchCreateRequest,
+    user: CurrentUser = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BatchCreatedResponse:
+    # --- validate image_type --------------------------------------
     try:
         image_type = ImageOCRType(data.image_type)
     except ValueError:
         raise HTTPException(
-            400,
+            status.HTTP_400_BAD_REQUEST,
             f"Unsupported image_type: {data.image_type}. "
             f"Call GET /images/types for the list.",
         )
 
-    job = ImageOCRJob(
-        job_id=str(uuid.uuid4()),
+    # --- validate file extensions ---------------------------------
+    invalid = [
+        f.file_name for f in data.files
+        if f.file_type.lower().lstrip(".") not in ALLOWED_IMAGE_TYPES
+    ]
+    if invalid:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Unsupported file type(s) for image OCR: {invalid}. "
+            f"Allowed: {sorted(ALLOWED_IMAGE_TYPES)}. "
+            f"For documents, use POST /documents.",
+        )
+
+    # --- create batch ---------------------------------------------
+    batch = await create_batch(
+        db,
         admin_id=user.admin_id,
         user_id=user.id,
-        source_url=data.source_url,
-        image_type=image_type,
-        status=ImageOCRStatus.PENDING,
+        kind=BatchKind.IMAGE,
+        template_id=None,
+        total_files=len(data.files),
+        label=data.label,
     )
-    db.add(job)
-    await db.flush()
 
-    run_image_ocr.apply_async(args=[job.job_id])
+    # --- create one job per file ---------------------------------
+    jobs: list[BatchJobItem] = []
+    job_ids: list[str] = []
 
-    return ImageAccepted(
-        job_id=job.job_id,
-        job_status=job.status.value,
+    for file_input in data.files:
+        job = ImageOCRJob(
+            job_id=str(uuid.uuid4()),
+            batch_id=batch.id,
+            admin_id=user.admin_id,
+            user_id=user.id,
+            source_url=file_input.url,
+            image_type=image_type,
+            status=ImageOCRStatus.PENDING,
+        )
+        db.add(job)
+        await db.flush()
+
+        jobs.append(BatchJobItem(
+            id=job.job_id,
+            file_name=file_input.file_name,
+            status=job.status.value,
+        ))
+        job_ids.append(job.job_id)
+
+    # --- dispatch ------------------------------------------------
+    for job_id in job_ids:
+        run_image_ocr.apply_async(args=[job_id])
+
+    return BatchCreatedResponse(
+        batch_id=batch.id,
+        total_files=len(jobs),
+        jobs=jobs,
     )
 
 

@@ -7,7 +7,7 @@ from app.admin import setup_admin
 from app.clients.http import clients
 from app.config import settings
 from app.routers import events, internal, visitors, workflows, flows, documents, images, analysis, templates, \
-    extractions, stats
+    extractions, stats, batch
 
 import app.tasks.celery_app  # noqa: F401
 import app.tasks.ocr_tasks  # noqa: F401
@@ -51,6 +51,7 @@ app.include_router(analysis.router)
 app.include_router(templates.router)
 app.include_router(extractions.router)
 app.include_router(stats.router)
+app.include_router(batch.router)
 
 # --- Admin ---------------------------------------------------------
 setup_admin(app)

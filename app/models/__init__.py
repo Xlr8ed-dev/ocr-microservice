@@ -1,3 +1,4 @@
+from app.models.batch import Batch, BatchKind, BatchStatus
 from app.models.document_analysis import DocumentAnalysis, AnalysisStatus
 from app.models.document_ocr_job import DocumentOCRJob, DocumentFileType, DocumentOCRStatus
 from app.models.event import Event
@@ -36,4 +37,8 @@ __all__ = [
     "Extraction",
     "ExtractionStatus",
     "ExtractionJobType",
+
+    "Batch",
+    "BatchKind",
+    "BatchStatus",
 ]
