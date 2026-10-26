@@ -40,6 +40,7 @@ from app.services.analysis_prompts import (
     build_document_analysis_payload,
     build_image_analysis_payload,
 )
+from app.tasks._helpers import run_async_safely
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ COST_PER_IMAGE_ANALYSIS_INR = 1.0
     max_retries=3,
 )
 def run_document_analysis(self, analysis_id: str) -> dict:
-    return asyncio.run(_do_run_document_analysis(analysis_id))
+    return run_async_safely(_do_run_document_analysis, analysis_id)
 
 
 async def _do_run_document_analysis(analysis_id: str) -> dict:
@@ -192,7 +193,7 @@ async def _do_run_document_analysis(analysis_id: str) -> dict:
     max_retries=3,
 )
 def run_image_analysis(self, analysis_id: str) -> dict:
-    return asyncio.run(_do_run_image_analysis(analysis_id))
+    return run_async_safely(_do_run_image_analysis, analysis_id)
 
 
 async def _do_run_image_analysis(analysis_id: str) -> dict:

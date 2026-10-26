@@ -19,6 +19,7 @@ from app.database import AsyncSessionLocal
 from app.models import ImageOCRJob, ImageOCRStatus
 from app.services.batch_service import refresh_batch_counters
 from app.services.image_prompts import IMAGE_TYPE_META
+from app.tasks._helpers import run_async_safely
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
     max_retries=3,
 )
 def run_image_ocr(self, job_id: str) -> dict:
-    return asyncio.run(_do_run_image_ocr(job_id))
+    return run_async_safely(_do_run_image_ocr, job_id)
 
 
 async def _do_run_image_ocr(job_id: str) -> dict:

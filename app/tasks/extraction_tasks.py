@@ -52,6 +52,7 @@ from app.services.extraction_prompts import (
     parse_extraction_result,
 )
 from app.services.heading_detect import detect_headings
+from app.tasks._helpers import run_async_safely
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ COST_PER_EXTRACTION_INR = 3.0
     max_retries=2,
 )
 def run_extraction(self, extraction_id: str) -> dict:
-    return asyncio.run(_do_run_extraction(extraction_id))
+    return run_async_safely(_do_run_extraction, extraction_id)
 
 
 # =========================================================

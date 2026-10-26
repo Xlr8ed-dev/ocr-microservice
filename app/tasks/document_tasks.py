@@ -52,6 +52,7 @@ from app.services.document_structure import (
     structure_chunk,
 )
 from app.services.heading_detect import detect_headings
+from app.tasks._helpers import run_async_safely
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ COST_PER_PAGE_INR = 1.0  # placeholder billing rate
     max_retries=2,
 )
 def run_document_ocr(self, job_id: str) -> dict:
-    return asyncio.run(_do_run_document_ocr(job_id))
+    return run_async_safely(_do_run_document_ocr, job_id)
 
 
 # =========================================================
