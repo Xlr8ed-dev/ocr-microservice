@@ -6,7 +6,6 @@ from typing import Any, Awaitable, Callable
 
 from app.database import engine
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -26,6 +25,7 @@ def run_async_safely(coro_func: Callable[..., Awaitable[Any]], *args, **kwargs) 
 
     The coroutine and the disposal share one loop, so cleanup is clean.
     """
+
     async def _wrap():
         try:
             return await coro_func(*args, **kwargs)
