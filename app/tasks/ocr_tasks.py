@@ -21,6 +21,7 @@ from app.services.business_card_service import (
     merge_ocr_results,
     parse_ai_response_to_ocr_result,
 )
+from app.tasks._helpers import run_async_safely
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ async def _write_usage_log(
     max_retries=3,
 )
 def run_ocr_primary(self, job_id: str) -> dict:
-    return _run(_do_run_ocr_primary(job_id))
+    return run_async_safely(_do_run_ocr_primary, job_id)
 
 
 async def _do_run_ocr_primary(job_id: str) -> dict:
@@ -358,7 +359,7 @@ async def _fail_workflow_if_exists(db, txn_id: str, error: str) -> None:
     max_retries=3,
 )
 def run_ocr_secondary(self, job_id: str) -> dict:
-    return _run(_do_run_ocr_secondary(job_id))
+    return run_async_safely(_do_run_ocr_secondary, job_id)
 
 
 async def _do_run_ocr_secondary(job_id: str) -> dict:

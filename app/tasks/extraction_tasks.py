@@ -6,6 +6,9 @@ Two paths depending on file type:
 
 Both converge on: {field_key: {value, confidence}}, then a min-confidence
 check decides between `completed` and `needs_review`.
+
+Every status transition also refreshes the parent Batch counters so the
+FE batch progress screen reflects the change on the next poll.
 """
 
 import asyncio
@@ -29,6 +32,7 @@ from app.models import (
     ImageOCRStatus,
     Template,
 )
+from app.services.batch_service import refresh_batch_counters
 from app.services.blurry_check import is_blurry
 from app.services.document_chunk import chunk_document
 from app.services.document_extract import (
@@ -48,11 +52,10 @@ from app.services.extraction_prompts import (
     parse_extraction_result,
 )
 from app.services.heading_detect import detect_headings
+from app.tasks._helpers import run_async_safely
 from app.tasks.celery_app import celery_app
 
-
 logger = logging.getLogger(__name__)
-
 
 # =========================================================
 # CONSTANTS
@@ -76,7 +79,7 @@ COST_PER_EXTRACTION_INR = 3.0
     max_retries=2,
 )
 def run_extraction(self, extraction_id: str) -> dict:
-    return asyncio.run(_do_run_extraction(extraction_id))
+    return run_async_safely(_do_run_extraction, extraction_id)
 
 
 # =========================================================
@@ -116,15 +119,19 @@ async def _do_run_extraction(extraction_id: str) -> dict:
             template_name = template.name
             template_desc = template.description
             fields = template.fields or []
+            batch_id = extraction.batch_id
+
+            await refresh_batch_counters(db, batch_id)
+            await db.commit()
 
         # --- 2. Dispatch by file type -------------------------------
         if job_type == ExtractionJobType.IMAGE:
             return await _run_image_path(
-                extraction_id, file_url, template_name, template_desc, fields,
+                extraction_id, batch_id, file_url, template_name, template_desc, fields,
             )
         elif job_type == ExtractionJobType.DOCUMENT:
             return await _run_document_path(
-                extraction_id, file_url, template_name, template_desc, fields,
+                extraction_id, batch_id, file_url, template_name, template_desc, fields,
             )
         else:
             await _fail(extraction_id, f"Unknown ocr_job_type: {job_type}")
@@ -139,11 +146,12 @@ async def _do_run_extraction(extraction_id: str) -> dict:
 # =========================================================
 
 async def _run_image_path(
-    extraction_id: str,
-    file_url: str,
-    template_name: str,
-    template_desc: str,
-    fields: list[dict],
+        extraction_id: str,
+        batch_id: str,
+        file_url: str,
+        template_name: str,
+        template_desc: str,
+        fields: list[dict],
 ) -> dict:
     # --- pre-flight blurry check ---
     try:
@@ -161,6 +169,9 @@ async def _run_image_path(
                 extraction.status = ExtractionStatus.BLURRY
                 extraction.error = f"Image appears blurry (avg confidence {avg_conf:.2f})"
                 extraction.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+
+                await refresh_batch_counters(db, batch_id)
                 await db.commit()
         logger.info("extraction %s marked blurry (conf=%.2f)", extraction_id, avg_conf)
         return {"status": "blurry", "extraction_id": extraction_id}
@@ -183,7 +194,7 @@ async def _run_image_path(
     usage = raw.get("usage") or {} if isinstance(raw, dict) else {}
 
     result = parse_extraction_result(data, fields)
-    await _finalize(extraction_id, result, fields, usage)
+    await _finalize(extraction_id, batch_id, result, fields, usage)
 
     return {"status": "completed", "extraction_id": extraction_id}
 
@@ -193,11 +204,12 @@ async def _run_image_path(
 # =========================================================
 
 async def _run_document_path(
-    extraction_id: str,
-    file_url: str,
-    template_name: str,
-    template_desc: str,
-    fields: list[dict],
+        extraction_id: str,
+        batch_id: str,
+        file_url: str,
+        template_name: str,
+        template_desc: str,
+        fields: list[dict],
 ) -> dict:
     # --- 1. text extraction ---
     try:
@@ -223,6 +235,9 @@ async def _run_document_path(
         )
         if extraction:
             extraction.status = ExtractionStatus.EXTRACTING
+            await db.commit()
+
+            await refresh_batch_counters(db, batch_id)
             await db.commit()
 
     results: list[ChunkResult] = []
@@ -274,7 +289,7 @@ async def _run_document_path(
     ai_tokens_out += int(usage.get("completion_tokens", 0) or 0)
 
     result = parse_extraction_result(data, fields)
-    await _finalize(extraction_id, result, fields, usage, ai_calls=ai_calls,
+    await _finalize(extraction_id, batch_id, result, fields, usage, ai_calls=ai_calls,
                     ai_tokens_in=ai_tokens_in, ai_tokens_out=ai_tokens_out)
 
     return {"status": "completed", "extraction_id": extraction_id}
@@ -285,14 +300,15 @@ async def _run_document_path(
 # =========================================================
 
 async def _finalize(
-    extraction_id: str,
-    result: dict,
-    fields: list[dict],
-    usage: dict,
-    *,
-    ai_calls: int = 1,
-    ai_tokens_in: int | None = None,
-    ai_tokens_out: int | None = None,
+        extraction_id: str,
+        batch_id: str,
+        result: dict,
+        fields: list[dict],
+        usage: dict,
+        *,
+        ai_calls: int = 1,
+        ai_tokens_in: int | None = None,
+        ai_tokens_out: int | None = None,
 ) -> None:
     """Write the extraction result and set the final status."""
     min_conf = compute_min_confidence(result, fields)
@@ -327,6 +343,9 @@ async def _finalize(
         extraction.error = None
         await db.commit()
 
+        await refresh_batch_counters(db, batch_id)
+        await db.commit()
+
     logger.info(
         "extraction complete id=%s status=%s min_conf=%.2f",
         extraction_id, final_status.value, min_conf,
@@ -343,6 +362,10 @@ async def _fail(extraction_id: str, error: str) -> None:
                 extraction.status = ExtractionStatus.FAILED
                 extraction.error = error[:2000]
                 extraction.completed_at = datetime.now(timezone.utc)
+                batch_id = extraction.batch_id
+                await db.commit()
+
+                await refresh_batch_counters(db, batch_id)
                 await db.commit()
         logger.warning("extraction FAILED id=%s err=%s", extraction_id, error[:200])
     except Exception:

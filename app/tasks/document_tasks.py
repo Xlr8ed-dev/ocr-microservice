@@ -18,6 +18,9 @@ Progress reporting:
 
 Any stage raising an exception flips status to FAILED, records the error,
 and stops. No partial output is written.
+
+Every status change also calls `refresh_batch_counters` so the parent
+Batch's aggregate counts stay accurate for the FE progress screen.
 """
 
 import asyncio
@@ -36,6 +39,7 @@ from app.models import (
     DocumentOCRJob,
     DocumentOCRStatus,
 )
+from app.services.batch_service import refresh_batch_counters
 from app.services.document_chunk import chunk_document
 from app.services.document_extract import (
     DocumentExtractionError,
@@ -48,17 +52,16 @@ from app.services.document_structure import (
     structure_chunk,
 )
 from app.services.heading_detect import detect_headings
+from app.tasks._helpers import run_async_safely
 from app.tasks.celery_app import celery_app
 
-
 logger = logging.getLogger(__name__)
-
 
 # =========================================================
 # CONSTANTS
 # =========================================================
 
-COST_PER_PAGE_INR = 1.0        # placeholder billing rate
+COST_PER_PAGE_INR = 1.0  # placeholder billing rate
 
 
 # =========================================================
@@ -75,7 +78,7 @@ COST_PER_PAGE_INR = 1.0        # placeholder billing rate
     max_retries=2,
 )
 def run_document_ocr(self, job_id: str) -> dict:
-    return asyncio.run(_do_run_document_ocr(job_id))
+    return run_async_safely(_do_run_document_ocr, job_id)
 
 
 # =========================================================
@@ -100,8 +103,13 @@ async def _do_run_document_ocr(job_id: str) -> dict:
             job.progress = 5
             await db.commit()
 
+            # Capture for later use outside the session
             source_url = job.source_url
             admin_id = job.admin_id
+            batch_id = job.batch_id
+
+            await refresh_batch_counters(db, batch_id)
+            await db.commit()
 
         logger.info("document task start job=%s url=%s", job_id, source_url)
 
@@ -123,6 +131,9 @@ async def _do_run_document_ocr(job_id: str) -> dict:
             job.progress = 25
             await db.commit()
 
+            await refresh_batch_counters(db, batch_id)
+            await db.commit()
+
         # --- 3. Detect headings ----------------------------------------
         headings = detect_headings(extracted)
 
@@ -130,7 +141,7 @@ async def _do_run_document_ocr(job_id: str) -> dict:
         chunks = chunk_document(extracted, headings)
 
         if not chunks:
-            await _complete_with_empty(job_id, page_count=extracted.page_count)
+            await _complete_with_empty(job_id, page_count=extracted.page_count, batch_id=batch_id)
             return {"status": "completed_empty", "job_id": job_id}
 
         async with AsyncSessionLocal() as db:
@@ -142,6 +153,9 @@ async def _do_run_document_ocr(job_id: str) -> dict:
             job.progress = 35
             await db.commit()
 
+            await refresh_batch_counters(db, batch_id)
+            await db.commit()
+
         # --- 5. Per-chunk AI structuring --------------------------------
         results: list[ChunkResult] = []
         previous_last_block: str | None = None
@@ -149,7 +163,7 @@ async def _do_run_document_ocr(job_id: str) -> dict:
         ai_tokens_in = 0
         ai_tokens_out = 0
 
-        progress_step = 60 / max(len(chunks), 1)   # 35 → 95
+        progress_step = 60 / max(len(chunks), 1)  # 35 → 95
 
         for chunk in chunks:
             logger.info(
@@ -171,7 +185,7 @@ async def _do_run_document_ocr(job_id: str) -> dict:
             # Context for next chunk
             previous_last_block = extract_last_block_text(result.blocks)
 
-            # Progress update
+            # Progress update (no status change — batch counters stay same)
             async with AsyncSessionLocal() as db:
                 job = await db.scalar(
                     select(DocumentOCRJob).where(DocumentOCRJob.job_id == job_id)
@@ -221,6 +235,9 @@ async def _do_run_document_ocr(job_id: str) -> dict:
             job.ai_tokens_out = ai_tokens_out
             await db.commit()
 
+            await refresh_batch_counters(db, batch_id)
+            await db.commit()
+
         logger.info(
             "document task complete job=%s pages=%d chunks=%d blocks=%d ms=%d",
             job_id, extracted.page_count, len(chunks),
@@ -252,6 +269,10 @@ async def _fail(job_id: str, error: str) -> None:
                 job.status = DocumentOCRStatus.FAILED
                 job.error = error[:2000]
                 job.completed_at = datetime.now(timezone.utc)
+                batch_id = job.batch_id
+                await db.commit()
+
+                await refresh_batch_counters(db, batch_id)
                 await db.commit()
         logger.warning("document job FAILED job=%s error=%s", job_id, error[:200])
     except Exception:
@@ -259,7 +280,7 @@ async def _fail(job_id: str, error: str) -> None:
         logger.exception("failed to mark document job as failed job=%s", job_id)
 
 
-async def _complete_with_empty(job_id: str, page_count: int | None) -> None:
+async def _complete_with_empty(job_id: str, page_count: int | None, batch_id: str) -> None:
     """Mark the job completed with no blocks — happens for empty documents."""
     async with AsyncSessionLocal() as db:
         job = await db.scalar(
@@ -275,6 +296,9 @@ async def _complete_with_empty(job_id: str, page_count: int | None) -> None:
         job.status = DocumentOCRStatus.COMPLETED
         job.progress = 100
         job.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        await refresh_batch_counters(db, batch_id)
         await db.commit()
 
 

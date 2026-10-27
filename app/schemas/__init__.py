@@ -1,5 +1,6 @@
 from app.schemas.analysis import AnalysisAccepted, DocumentAnalyzeRequest, DocumentAnalysisOut, \
     DocumentAnalysisListItem, ImageAnalyzeRequest, ImageAnalysisOut, ImageAnalysisListItem
+from app.schemas.batch import BatchCreatedResponse, BatchJobItem, BatchJobStatusItem, BatchListItem, BatchOut, FileInput
 from app.schemas.common import (
     ErrorResponse,
     PaginatedResponse,
@@ -7,12 +8,12 @@ from app.schemas.common import (
     StatusResponse,
 )
 from app.schemas.auth import CurrentUserOut
-from app.schemas.document import Block, DocumentAccepted, DocumentCreateRequest, DocumentJobOut, DocumentListOut, \
+from app.schemas.document import Block, DocumentJobOut, DocumentListOut, \
     DocumentMetadata, DocumentOutput, HeadingBlock, ParagraphBlock, ListBlock, TableBlock, PageBreakBlock, ImageBlock
 from app.schemas.event import EventCreate, EventOut, EventUpdate
-from app.schemas.extraction import ExtractionAccepted, ExtractionCreateRequest, ExtractionListItem, ExtractionOut, \
+from app.schemas.extraction import ExtractionListItem, ExtractionOut, \
     ExtractionResultField, ExtractionFieldEdit, ExtractionPatchRequest
-from app.schemas.image import ImageAccepted, ImageCreateRequest, ImageJobOut, ImageListOut, ImageTypeInfo, \
+from app.schemas.image import ImageJobOut, ImageListOut, ImageTypeInfo, \
     ImageTypeListOut
 from app.schemas.stats import StatsOverviewOut, StatusCountItem, TemplateUsageItem, NeedsReviewCountOut
 from app.schemas.template import TemplateCategoryListOut, TemplateCategoryOut, TemplateField, TemplateListItem, \
@@ -88,8 +89,6 @@ __all__ = [
     "WorkflowTriggerRequest",
     # document
     "Block",
-    "DocumentAccepted",
-    "DocumentCreateRequest",
     "DocumentJobOut",
     "DocumentListOut",
     "DocumentMetadata",
@@ -101,8 +100,6 @@ __all__ = [
     "PageBreakBlock",
     "ImageBlock",
     # image
-    "ImageAccepted",
-    "ImageCreateRequest",
     "ImageJobOut",
     "ImageListOut",
     "ImageTypeInfo",
@@ -123,8 +120,6 @@ __all__ = [
     "TemplateOut",
 
     # Extraction
-    "ExtractionAccepted",
-    "ExtractionCreateRequest",
     "ExtractionListItem",
     "ExtractionOut",
     "ExtractionResultField",
@@ -136,4 +131,11 @@ __all__ = [
     "TemplateUsageItem",
 
     "NeedsReviewCountOut",
+
+    "BatchCreatedResponse",
+    "BatchJobItem",
+    "BatchJobStatusItem",
+    "BatchListItem",
+    "BatchOut",
+    "FileInput",
 ]

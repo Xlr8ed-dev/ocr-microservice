@@ -17,15 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import CurrentUser, current_user
-from app.models import DocumentOCRJob, DocumentOCRStatus
+from app.models import DocumentOCRJob, DocumentOCRStatus, BatchKind, DocumentFileType
+from app.schemas.batch import BatchCreatedResponse, BatchJobItem
 from app.schemas.common import PaginatedResponse
 from app.schemas.document import (
-    DocumentAccepted,
-    DocumentCreateRequest,
     DocumentJobOut,
     DocumentListOut,
-    DocumentOutput,
+    DocumentOutput, DocumentBatchCreateRequest,
 )
+from app.services.batch_service import create_batch
 from app.services.document_export import (
     render_blocks_as_markdown,
     render_blocks_as_text,
@@ -37,39 +37,88 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 
 
 # =========================================================
-# CREATE
+# CONSTANTS
+# =========================================================
+
+ALLOWED_DOCUMENT_TYPES = {"pdf", "docx", "txt"}
+
+
+# =========================================================
+# CREATE — batch upload
 # =========================================================
 
 @router.post(
     "",
-    response_model=DocumentAccepted,
+    response_model=BatchCreatedResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-async def create_document_job(
-        data: DocumentCreateRequest,
-        user: CurrentUser = Depends(current_user),
-        db: AsyncSession = Depends(get_db),
-) -> DocumentAccepted:
-    job = DocumentOCRJob(
-        job_id=str(uuid.uuid4()),
+async def create_document_batch(
+    data: DocumentBatchCreateRequest,
+    user: CurrentUser = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BatchCreatedResponse:
+    # --- validate file types --------------------------------------
+    invalid = [
+        f.file_name for f in data.files
+        if f.file_type.lower().lstrip(".") not in ALLOWED_DOCUMENT_TYPES
+    ]
+    if invalid:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Unsupported file type(s) for document OCR: {invalid}. "
+            f"Allowed: {sorted(ALLOWED_DOCUMENT_TYPES)}. "
+            f"For images, use POST /images.",
+        )
+
+    # --- create batch ---------------------------------------------
+    batch = await create_batch(
+        db,
         admin_id=user.admin_id,
         user_id=user.id,
-        source_url=data.source_url,
-        file_name=data.file_name,
-        # file_type is filled in by the worker after extraction
-        # We temporarily set it to a placeholder; the worker overwrites
-        file_type="txt",  # placeholder; will be corrected
-        status=DocumentOCRStatus.PENDING,
-        progress=0,
+        kind=BatchKind.DOCUMENT,
+        template_id=None,
+        total_files=len(data.files),
+        label=data.label,
     )
-    db.add(job)
-    await db.flush()
 
-    run_document_ocr.apply_async(args=[job.job_id])
+    # --- create one job per file ---------------------------------
+    jobs: list[BatchJobItem] = []
+    job_ids: list[str] = []
 
-    return DocumentAccepted(
-        job_id=job.job_id,
-        job_status=job.status.value,
+    for file_input in data.files:
+        # We don't know the exact file type (pdf_text vs pdf_scan) until
+        # the worker reads the file. Default to TXT as a safe placeholder;
+        # the worker updates it after extraction.
+        job = DocumentOCRJob(
+            job_id=str(uuid.uuid4()),
+            batch_id=batch.id,
+            admin_id=user.admin_id,
+            user_id=user.id,
+            source_url=file_input.url,
+            file_name=file_input.file_name,
+            file_type=DocumentFileType.TXT,
+            status=DocumentOCRStatus.PENDING,
+            progress=0,
+        )
+        db.add(job)
+        await db.flush()
+
+        jobs.append(BatchJobItem(
+            id=job.job_id,
+            file_name=job.file_name or "",
+            status=job.status.value,
+        ))
+        job_ids.append(job.job_id)
+
+    # --- dispatch workers -----------------------------------------
+    # Dispatch after flush — worker may start immediately and needs the row
+    for job_id in job_ids:
+        run_document_ocr.apply_async(args=[job_id])
+
+    return BatchCreatedResponse(
+        batch_id=batch.id,
+        total_files=len(jobs),
+        jobs=jobs,
     )
 
 

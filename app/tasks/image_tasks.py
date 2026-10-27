@@ -1,6 +1,9 @@
 """Celery task for generic image OCR.
 
 One vision call per job. No chunking, no merging.
+
+Refreshes the parent Batch counters on every status transition so the
+FE progress screen reflects the change on the next poll.
 """
 
 import asyncio
@@ -14,7 +17,9 @@ from app.clients.ai import AIServiceError, vision_ocr
 from app.clients.http import clients
 from app.database import AsyncSessionLocal
 from app.models import ImageOCRJob, ImageOCRStatus
+from app.services.batch_service import refresh_batch_counters
 from app.services.image_prompts import IMAGE_TYPE_META
+from app.tasks._helpers import run_async_safely
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -30,7 +35,7 @@ logger = logging.getLogger(__name__)
     max_retries=3,
 )
 def run_image_ocr(self, job_id: str) -> dict:
-    return asyncio.run(_do_run_image_ocr(job_id))
+    return run_async_safely(_do_run_image_ocr, job_id)
 
 
 async def _do_run_image_ocr(job_id: str) -> dict:
@@ -51,6 +56,10 @@ async def _do_run_image_ocr(job_id: str) -> dict:
 
             source_url = job.source_url
             image_type = job.image_type
+            batch_id = job.batch_id
+
+            await refresh_batch_counters(db, batch_id)
+            await db.commit()
 
         meta = IMAGE_TYPE_META.get(image_type)
         if not meta:
@@ -85,6 +94,9 @@ async def _do_run_image_ocr(job_id: str) -> dict:
             job.cost_estimate = 1.0
             await db.commit()
 
+            await refresh_batch_counters(db, batch_id)
+            await db.commit()
+
         logger.info(
             "image task complete job=%s type=%s ms=%d",
             job_id, image_type.value, int((time.monotonic() - started) * 1000),
@@ -105,6 +117,10 @@ async def _fail(job_id: str, error: str) -> None:
                 job.status = ImageOCRStatus.FAILED
                 job.error = error[:2000]
                 job.completed_at = datetime.now(timezone.utc)
+                batch_id = job.batch_id
+                await db.commit()
+
+                await refresh_batch_counters(db, batch_id)
                 await db.commit()
     except Exception:
         logger.exception("failed to mark image job as failed job=%s", job_id)

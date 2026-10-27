@@ -11,6 +11,7 @@ from app.clients.whatsapp import send_whatsapp
 from app.database import AsyncSessionLocal
 from app.flows.registry import FLOWS
 from app.models import Event, Visitor, WorkflowRun, WorkflowStatus
+from app.tasks._helpers import run_async_safely
 from app.tasks.celery_app import celery_app
 
 
@@ -23,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(bind=True, name="workflow.run", max_retries=0)
 def run_workflow(self, run_id: str) -> dict:
-    return asyncio.run(_do_run_workflow(run_id))
+    return (
+        run_async_safely(_do_run_workflow, run_id))
 
 
 # =========================================================

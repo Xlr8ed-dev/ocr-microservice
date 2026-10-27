@@ -1,10 +1,3 @@
-"""Document analysis: combined summary + classification on demand.
-
-One row per analysis run. A document can have multiple analyses over time
-(different category sets, different prompts, re-runs). The latest completed
-one is what the FE shows by default.
-"""
-
 from datetime import datetime
 from enum import Enum
 
@@ -22,13 +15,14 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.models.enum_helpers import _enum_values
 
 
 class AnalysisStatus(str, Enum):
-    PENDING    = "pending"
+    PENDING = "pending"
     PROCESSING = "processing"
-    COMPLETED  = "completed"
-    FAILED     = "failed"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class DocumentAnalysis(Base):
@@ -36,45 +30,41 @@ class DocumentAnalysis(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     analysis_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
-
-    # --- parent job -----------------------------------------------
     job_id: Mapped[str] = mapped_column(
         String(36),
         ForeignKey("document_ocr_jobs.job_id", ondelete="CASCADE"),
         index=True,
     )
 
-    # --- ownership (denormalised for scoping) ---------------------
     admin_id: Mapped[int] = mapped_column(Integer, index=True)
     user_id: Mapped[int] = mapped_column(Integer)
 
-    # --- result ---------------------------------------------------
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     subcategory: Mapped[str | None] = mapped_column(String(64), nullable=True)
     confidence: Mapped[float | None] = mapped_column(nullable=True)
     tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
-    # --- execution ------------------------------------------------
     status: Mapped[AnalysisStatus] = mapped_column(
-        SAEnum(AnalysisStatus, name="analysis_status"),
+        SAEnum(
+            AnalysisStatus,
+            name="analysis_status",
+            values_callable=_enum_values,
+        ),
         default=AnalysisStatus.PENDING,
         index=True,
     )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # --- AI usage ------------------------------------------------
     ai_calls: Mapped[int] = mapped_column(Integer, default=0)
     ai_tokens_in: Mapped[int] = mapped_column(Integer, default=0)
     ai_tokens_out: Mapped[int] = mapped_column(Integer, default=0)
     cost_estimate: Mapped[float | None] = mapped_column(nullable=True)
 
-    # --- config used for this run (audit / A-B testing) -----------
     prompt_version: Mapped[str] = mapped_column(String(32), default="v1")
     categories_used: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     max_words_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    # --- timestamps ----------------------------------------------
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )

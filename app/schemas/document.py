@@ -13,6 +13,8 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.batch import FileInput
+
 
 # =========================================================
 # BLOCK TYPES
@@ -94,19 +96,29 @@ class DocumentOutput(BaseModel):
 # REQUEST / RESPONSE
 # =========================================================
 
-class DocumentCreateRequest(BaseModel):
-    source_url: str = Field(..., description="S3 URL of the uploaded document")
-    file_name: str | None = Field(
-        default=None, max_length=255,
-        description="Original filename, used for export naming",
+class DocumentBatchCreateRequest(BaseModel):
+    """Create a batch of document OCR jobs. 1 to 30 files.
+
+    Accepted file_type values: pdf | docx | txt.
+    """
+    files: list[FileInput] = Field(
+        ...,
+        min_length=1,
+        max_length=30,
+        description="1 to 30 files. All must be document types.",
+    )
+    label: str | None = Field(
+        default=None,
+        max_length=255,
+        description="Optional user-facing label for the batch",
     )
 
 
-class DocumentAccepted(BaseModel):
-    status: str = "success"
-    job_id: str
-    job_status: str
-    message: str | None = None
+# class DocumentAccepted(BaseModel):
+#     status: str = "success"
+#     job_id: str
+#     job_status: str
+#     message: str | None = None
 
 
 class DocumentJobOut(BaseModel):

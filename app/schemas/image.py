@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.batch import FileInput
+
 
 # =========================================================
 # SUPPORTED TYPES — used by GET /images/types
@@ -22,20 +24,30 @@ class ImageTypeListOut(BaseModel):
 # REQUEST / RESPONSE
 # =========================================================
 
-class ImageCreateRequest(BaseModel):
-    source_url: str = Field(..., description="S3 URL of the uploaded image")
+class ImageBatchCreateRequest(BaseModel):
+    """Create a batch of image OCR jobs. 1 to 30 files.
+
+    Accepted file_type values: jpg | jpeg | png | webp.
+    All files in the batch share the same image_type.
+    """
     image_type: str = Field(
         ...,
         description="One of: invoice | receipt | visiting_card | "
                     "hotel_menu | id_card | handwritten | generic",
     )
+    files: list[FileInput] = Field(
+        ...,
+        min_length=1,
+        max_length=30,
+    )
+    label: str | None = Field(default=None, max_length=255)
 
 
-class ImageAccepted(BaseModel):
-    status: str = "success"
-    job_id: str
-    job_status: str
-    message: str | None = None
+# class ImageAccepted(BaseModel):
+#     status: str = "success"
+#     job_id: str
+#     job_status: str
+#     message: str | None = None
 
 
 class ImageJobOut(BaseModel):
