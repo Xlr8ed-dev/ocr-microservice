@@ -62,6 +62,15 @@ class Settings(BaseSettings):
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "admin"
 
+    # --- S3 -------------------------------------------------------
+    AWS_ACCESS_KEY_ID: str
+    AWS_SECRET_ACCESS_KEY: str
+    AWS_STORAGE_BUCKET_NAME: str
+    AWS_S3_REGION_NAME: str = "ap-south-1"
+
+    S3_PRESIGN_EXPIRES_SECONDS: int = 3600
+    S3_UPLOAD_MAX_MB: int = 50
+
     @model_validator(mode="after")
     def _check_auth_mode(self):
         if self.ENVIRONMENT == "production" and self.AUTH_MODE == "mock":
