@@ -16,6 +16,7 @@ import pytesseract
 from PIL import Image
 
 from app.config import settings
+from app.services.s3_service import normalize_download_url
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ async def is_blurry(image_url: str) -> tuple[bool, float]:
 
 async def _download(url: str) -> str:
     """Stream the file to a temp path, return the path."""
+    url = normalize_download_url(url)
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".img")
     tmp_path = tmp.name
     tmp.close()

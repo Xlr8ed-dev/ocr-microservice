@@ -31,3 +31,7 @@ htmlcov/
 # OS files
 .DS_Store
 Thumbs.db
+check_s3.py
+do_upload.py
+test_full_flow.py
+test_upload.py

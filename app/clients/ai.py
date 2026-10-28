@@ -3,6 +3,7 @@ from typing import Any
 import httpx
 
 from app.clients.http import clients
+from app.services.s3_service import normalize_download_url
 
 # =========================================================
 # RESPONSE SCHEMA (unchanged from your tested version)
@@ -100,6 +101,8 @@ async def vision_ocr(
         raise AIServiceError("Image URL is empty")
 
     assert clients.ai is not None, "AI client not initialised"
+
+    image_url = normalize_download_url(image_url)
 
     payload = build_vision_payload(
         prompt=prompt,
