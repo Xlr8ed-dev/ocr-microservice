@@ -30,6 +30,10 @@ from app.services.document_export import (
     render_blocks_as_markdown,
     render_blocks_as_text,
 )
+from app.services.requested_content import (
+    normalize_requested_keys,
+    normalize_requested_prompt,
+)
 from app.tasks.document_tasks import run_document_ocr
 from app.utils.pagination import DEFAULT_PAGE_SIZE, build_meta, parse_page
 
@@ -70,6 +74,13 @@ async def create_document_batch(
             f"For images, use POST /images.",
         )
 
+    # --- optional user-requested content --------------------------
+    try:
+        requested_keys = normalize_requested_keys(data.keys)
+        requested_prompt = normalize_requested_prompt(data.prompt)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+
     # --- create batch ---------------------------------------------
     batch = await create_batch(
         db,
@@ -99,6 +110,8 @@ async def create_document_batch(
             file_type=DocumentFileType.TXT,
             status=DocumentOCRStatus.PENDING,
             progress=0,
+            requested_keys=requested_keys,
+            requested_prompt=requested_prompt,
         )
         db.add(job)
         await db.flush()
@@ -279,6 +292,8 @@ def _job_to_out(job: DocumentOCRJob) -> DocumentJobOut:
         chunk_count=job.chunk_count,
         output=output,
         error=job.error,
+        requested_keys=job.requested_keys,
+        requested_prompt=job.requested_prompt,
         cost_estimate=job.cost_estimate,
         ai_calls=job.ai_calls,
         ai_tokens_in=job.ai_tokens_in,

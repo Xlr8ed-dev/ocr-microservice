@@ -61,6 +61,10 @@ class DocumentOCRJob(Base):
     )
     file_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Optional FE-supplied extraction spec (we consume, never manage, keys)
+    requested_keys: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    requested_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     status: Mapped[DocumentOCRStatus] = mapped_column(
         SAEnum(
             DocumentOCRStatus,

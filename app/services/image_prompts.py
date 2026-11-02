@@ -6,7 +6,14 @@ Each entry has:
   - response_schema (JSON schema the AI must conform to)
 """
 
+import copy
+
 from app.models import ImageOCRType
+from app.services.requested_content import (
+    build_requested_instructions,
+    build_requested_response_schema,
+    has_requested_content,
+)
 
 # =========================================================
 # INVOICE
@@ -296,3 +303,50 @@ IMAGE_TYPE_META: dict[ImageOCRType, dict] = {
         "response_schema": _GENERIC_SCHEMA,
     },
 }
+
+
+# =========================================================
+# REQUESTED-CONTENT BUILDERS
+# =========================================================
+
+def build_image_system_prompt(
+    meta: dict,
+    *,
+    requested_keys: list[str] | None = None,
+    requested_prompt: str | None = None,
+) -> str:
+    """Return the type prompt plus any user-requested extraction instructions."""
+    instructions = build_requested_instructions(
+        keys=requested_keys,
+        prompt=requested_prompt,
+    )
+    if not instructions:
+        return meta["system_prompt"]
+
+    return (
+        f"{meta['system_prompt']}\n\n"
+        "Keep the normal type-specific fields at the top level of the JSON "
+        "object, and put user-requested content under the `requested` key.\n\n"
+        f"{instructions}"
+    )
+
+
+def build_image_response_schema(
+    meta: dict,
+    *,
+    requested_keys: list[str] | None = None,
+    requested_prompt: str | None = None,
+) -> dict:
+    """Return the type schema, extended with `requested` when needed."""
+    if not has_requested_content(requested_keys, requested_prompt):
+        return meta["response_schema"]
+
+    schema = copy.deepcopy(meta["response_schema"])
+    schema.setdefault("properties", {})["requested"] = (
+        build_requested_response_schema(
+            keys=requested_keys,
+            prompt=requested_prompt,
+        )
+    )
+    schema["required"] = [*schema.get("required", []), "requested"]
+    return schema

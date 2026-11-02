@@ -3,7 +3,19 @@
 The AI receives chunks of extracted document text and returns structured
 blocks. The system prompt is fixed; the user prompt is per-chunk and
 includes light context so the model knows where it is in the document.
+
+When the FE requests extra content (a list of keys and/or a custom prompt),
+that request is injected into the per-chunk prompt and into the response
+schema under an optional `requested` object.
 """
+
+import copy
+
+from app.services.requested_content import (
+    build_requested_instructions,
+    build_requested_response_schema,
+    has_requested_content,
+)
 
 # =========================================================
 # SYSTEM PROMPT
@@ -62,6 +74,8 @@ def build_user_prompt(
     heading_context: str | None,
     previous_last_block: str | None,
     chunk_text: str,
+    requested_keys: list[str] | None = None,
+    requested_prompt: str | None = None,
 ) -> str:
     """Build the per-chunk user prompt.
 
@@ -84,6 +98,14 @@ def build_user_prompt(
             "The previous chunk ended with this text (for continuity, do NOT repeat it):\n"
             f'"{previous_last_block}"'
         )
+
+    requested = build_requested_instructions(
+        keys=requested_keys,
+        prompt=requested_prompt,
+    )
+    if requested:
+        parts.append("")
+        parts.append(requested)
 
     parts.append("")
     parts.append("Raw text of this chunk:")
@@ -154,6 +176,8 @@ def build_ai_payload(
     heading_context: str | None,
     previous_last_block: str | None,
     chunk_text: str,
+    requested_keys: list[str] | None = None,
+    requested_prompt: str | None = None,
     model: str = "gpt-4o-mini",
 ) -> dict:
     """Assemble the /chat/completion request body."""
@@ -165,7 +189,19 @@ def build_ai_payload(
         heading_context=heading_context,
         previous_last_block=previous_last_block,
         chunk_text=chunk_text,
+        requested_keys=requested_keys,
+        requested_prompt=requested_prompt,
     )
+
+    schema = RESPONSE_SCHEMA
+    requested_schema = build_requested_response_schema(
+        keys=requested_keys,
+        prompt=requested_prompt,
+    )
+    if has_requested_content(requested_keys, requested_prompt):
+        schema = copy.deepcopy(RESPONSE_SCHEMA)
+        schema["properties"]["requested"] = requested_schema
+        schema["required"] = [*schema.get("required", []), "requested"]
 
     return {
         "messages": [
@@ -178,5 +214,5 @@ def build_ai_payload(
         "use_rag": False,
         "temperature": 0.1,
         "max_tokens": 8000,
-        "response_schema": RESPONSE_SCHEMA,
+        "response_schema": schema,
     }

@@ -54,6 +54,7 @@ def build_vision_payload(
         prompt: str,
         image_url: str,
         image_side: str | None = None,
+        response_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     full_prompt = prompt
     if image_side:
@@ -78,7 +79,7 @@ def build_vision_payload(
         "use_rag": False,
         "temperature": 0,
         "max_tokens": 2000,
-        "response_schema": OCR_RESPONSE_SCHEMA,
+        "response_schema": response_schema or OCR_RESPONSE_SCHEMA,
     }
 
 
@@ -91,6 +92,7 @@ async def vision_ocr(
         image_url: str,
         prompt: str,
         image_side: str | None = None,
+        response_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Call the AI service's vision endpoint and return the raw dict.
 
@@ -108,6 +110,7 @@ async def vision_ocr(
         prompt=prompt,
         image_url=image_url,
         image_side=image_side,
+        response_schema=response_schema,
     )
 
     try:

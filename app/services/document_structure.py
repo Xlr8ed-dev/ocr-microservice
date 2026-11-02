@@ -14,6 +14,7 @@ from app.clients.ai import AIServiceError
 from app.clients.http import clients
 from app.services.document_chunk import Chunk
 from app.services.document_prompts import build_ai_payload
+from app.services.requested_content import sanitize_requested_output
 
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class ChunkResult:
     chunk_index: int
     blocks: list[dict] = field(default_factory=list)
     title: str | None = None
+    requested: dict | None = None
     usage: dict = field(default_factory=dict)
     raw_response: dict = field(default_factory=dict)
 
@@ -40,6 +42,8 @@ async def structure_chunk(
     chunk: Chunk,
     *,
     previous_last_block: str | None = None,
+    requested_keys: list[str] | None = None,
+    requested_prompt: str | None = None,
 ) -> ChunkResult:
     """Send one chunk to the AI service and return its structured blocks.
 
@@ -53,6 +57,8 @@ async def structure_chunk(
         heading_context=chunk.heading_context,
         previous_last_block=previous_last_block,
         chunk_text=chunk.text,
+        requested_keys=requested_keys,
+        requested_prompt=requested_prompt,
     )
 
     assert clients.ai is not None, "AI client not initialised"
@@ -99,10 +105,17 @@ async def structure_chunk(
     # omitted them. The AI doesn't always know exact pages; we help it.
     blocks = _fill_missing_pages(blocks, chunk.start_page)
 
+    requested = sanitize_requested_output(
+        data.get("requested"),
+        keys=requested_keys,
+        prompt=requested_prompt,
+    )
+
     return ChunkResult(
         chunk_index=chunk.chunk_index,
         blocks=blocks,
         title=title,
+        requested=requested,
         usage=raw.get("usage") or {},
         raw_response=raw,
     )
