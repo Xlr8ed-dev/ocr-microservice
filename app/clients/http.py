@@ -6,6 +6,7 @@ from app.config import settings
 class ServiceClients:
     ai: httpx.AsyncClient | None = None
     sso: httpx.AsyncClient | None = None
+    auth: httpx.AsyncClient | None = None
     email: httpx.AsyncClient | None = None
     whatsapp: httpx.AsyncClient | None = None
 
@@ -32,6 +33,16 @@ class ServiceClients:
             limits=common_limits,
         )
 
+        # No static Authorization header: the caller's own bearer token and
+        # X-Device-Fingerprint are forwarded per request by
+        # app.services.auth_service, so the auth service validates the real
+        # user rather than this service acting as itself.
+        self.auth = httpx.AsyncClient(
+            base_url=settings.auth_service_base_url,
+            timeout=settings.AUTH_SERVICE_TIMEOUT,
+            limits=common_limits,
+        )
+
         if settings.EMAIL_SERVICE_URL:
             self.email = httpx.AsyncClient(
                 base_url=settings.EMAIL_SERVICE_URL,
@@ -47,7 +58,7 @@ class ServiceClients:
             )
 
     async def shutdown(self) -> None:
-        for c in (self.ai, self.sso, self.email, self.whatsapp):
+        for c in (self.ai, self.sso, self.auth, self.email, self.whatsapp):
             if c is not None:
                 await c.aclose()
 

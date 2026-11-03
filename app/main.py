@@ -7,7 +7,7 @@ from app.admin import setup_admin
 from app.clients.http import clients
 from app.config import settings
 from app.routers import events, internal, visitors, workflows, flows, documents, images, analysis, templates, \
-    extractions, stats, batch, uploads, files
+    extractions, stats, batch, uploads, files, auth
 
 import app.tasks.celery_app  # noqa: F401
 import app.tasks.ocr_tasks  # noqa: F401
@@ -40,6 +40,7 @@ app.add_middleware(
 )
 
 # --- API routers ---------------------------------------------------
+app.include_router(auth.router)
 app.include_router(events.router)
 app.include_router(visitors.router)
 app.include_router(workflows.router)
