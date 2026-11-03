@@ -18,7 +18,12 @@ from app.clients.http import clients
 from app.database import AsyncSessionLocal
 from app.models import ImageOCRJob, ImageOCRStatus
 from app.services.batch_service import refresh_batch_counters
-from app.services.image_prompts import IMAGE_TYPE_META
+from app.services.image_prompts import (
+    IMAGE_TYPE_META,
+    build_image_response_schema,
+    build_image_system_prompt,
+)
+from app.services.requested_content import sanitize_requested_output
 from app.tasks._helpers import run_async_safely
 from app.tasks.celery_app import celery_app
 
@@ -57,6 +62,8 @@ async def _do_run_image_ocr(job_id: str) -> dict:
             source_url = job.source_url
             image_type = job.image_type
             batch_id = job.batch_id
+            requested_keys = job.requested_keys
+            requested_prompt = job.requested_prompt
 
             await refresh_batch_counters(db, batch_id)
             await db.commit()
@@ -69,7 +76,16 @@ async def _do_run_image_ocr(job_id: str) -> dict:
         try:
             raw = await vision_ocr(
                 image_url=source_url,
-                prompt=meta["system_prompt"],
+                prompt=build_image_system_prompt(
+                    meta,
+                    requested_keys=requested_keys,
+                    requested_prompt=requested_prompt,
+                ),
+                response_schema=build_image_response_schema(
+                    meta,
+                    requested_keys=requested_keys,
+                    requested_prompt=requested_prompt,
+                ),
             )
         except AIServiceError as exc:
             await _fail(job_id, str(exc)[:2000])
@@ -79,11 +95,20 @@ async def _do_run_image_ocr(job_id: str) -> dict:
         data = raw.get("data", raw) if isinstance(raw, dict) else {}
         usage = raw.get("usage") or {} if isinstance(raw, dict) else {}
 
+        output = data if isinstance(data, dict) else {"raw": data}
+        requested = sanitize_requested_output(
+            output.get("requested"),
+            keys=requested_keys,
+            prompt=requested_prompt,
+        )
+        if requested is not None:
+            output = {**output, "requested": requested}
+
         async with AsyncSessionLocal() as db:
             job = await db.scalar(
                 select(ImageOCRJob).where(ImageOCRJob.job_id == job_id)
             )
-            job.output = data if isinstance(data, dict) else {"raw": data}
+            job.output = output
             job.raw_response = raw if isinstance(raw, dict) else None
             job.status = ImageOCRStatus.COMPLETED
             job.completed_at = datetime.now(timezone.utc)

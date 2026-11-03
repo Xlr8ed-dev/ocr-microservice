@@ -1,8 +1,20 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+)
 
 from app.schemas.batch import FileInput
+
+RequestedKey = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+]
 
 
 # =========================================================
@@ -42,6 +54,27 @@ class ImageBatchCreateRequest(BaseModel):
     )
     label: str | None = Field(default=None, max_length=255)
 
+    # --- optional user-requested content -------------------------
+    keys: list[RequestedKey] | None = Field(
+        default=None,
+        max_length=50,
+        description=(
+            "Optional field keys the FE wants extracted as well as normal "
+            "OCR. The service does not manage this vocabulary — it only "
+            "consumes it. Omit for normal OCR."
+        ),
+    )
+    prompt: str | None = Field(
+        default=None,
+        max_length=4000,
+        validation_alias=AliasChoices("prompt", "custom_prompt"),
+        description=(
+            "Optional custom extraction instruction to run on top of normal "
+            "OCR. Result is stored under output.requested.prompt_result. "
+            "`custom_prompt` is accepted as an alias."
+        ),
+    )
+
 
 # class ImageAccepted(BaseModel):
 #     status: str = "success"
@@ -64,6 +97,9 @@ class ImageJobOut(BaseModel):
     # output shape depends on image_type — see app/services/image_prompts.py
     output: dict | None = None
     error: str | None = None
+
+    requested_keys: list[str] | None = None
+    requested_prompt: str | None = None
 
     cost_estimate: float | None = None
     ai_calls: int = 0

@@ -9,11 +9,37 @@ against its own model based on the `type` field.
 """
 
 from datetime import datetime
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+)
 
 from app.schemas.batch import FileInput
+
+RequestedKey = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+]
+
+
+# =========================================================
+# SUPPORTED DOCUMENT TYPES — used by GET /documents/types
+# =========================================================
+
+class DocumentTypeInfo(BaseModel):
+    key: str
+    label: str
+    description: str
+
+
+class DocumentTypeListOut(BaseModel):
+    status: str = "success"
+    data: list[DocumentTypeInfo]
 
 
 # =========================================================
@@ -81,6 +107,7 @@ class DocumentMetadata(BaseModel):
     page_count: int | None = None
     language: str | None = None
     extraction_method: str | None = None   # pdf_text | pdf_scan | docx | doc | txt
+    document_type: str | None = None       # generic | tender | srs | ...
     chunk_count: int | None = None
     char_count: int | None = None
     processing_time_ms: int | None = None
@@ -90,6 +117,8 @@ class DocumentOutput(BaseModel):
     title: str | None = None
     blocks: list[Block] = Field(default_factory=list)
     metadata: DocumentMetadata = Field(default_factory=DocumentMetadata)
+    # Populated only when the FE sent requested keys / a custom prompt.
+    requested: dict[str, Any] | None = None
 
 
 # =========================================================
@@ -107,10 +136,40 @@ class DocumentBatchCreateRequest(BaseModel):
         max_length=30,
         description="1 to 30 files. All must be document types.",
     )
+    document_type: str | None = Field(
+        default=None,
+        description=(
+            "Document profile: generic | tender | srs | specification | "
+            "report | letter | memo | policy | form | proposal. "
+            "Omit or send null for generic."
+        ),
+    )
     label: str | None = Field(
         default=None,
         max_length=255,
         description="Optional user-facing label for the batch",
+    )
+
+    # --- optional user-requested content -------------------------
+    keys: list[RequestedKey] | None = Field(
+        default=None,
+        max_length=50,
+        description=(
+            "Optional field keys the FE wants extracted as well as normal "
+            "OCR (e.g. ['invoice_number', 'total_amount']). The service does "
+            "not manage this vocabulary — it only consumes it. Omit for "
+            "normal OCR."
+        ),
+    )
+    prompt: str | None = Field(
+        default=None,
+        max_length=4000,
+        validation_alias=AliasChoices("prompt", "custom_prompt"),
+        description=(
+            "Optional custom extraction instruction to run on top of normal "
+            "OCR. Result is stored under output.requested.prompt_result. "
+            "`custom_prompt` is accepted as an alias."
+        ),
     )
 
 
@@ -143,6 +202,10 @@ class DocumentJobOut(BaseModel):
 
     output: DocumentOutput | None = None
     error: str | None = None
+
+    requested_keys: list[str] | None = None
+    requested_prompt: str | None = None
+    document_type: str | None = None
 
     cost_estimate: float | None = None
 

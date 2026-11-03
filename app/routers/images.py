@@ -23,6 +23,10 @@ from app.schemas.image import (
 )
 from app.services.batch_service import create_batch
 from app.services.image_prompts import IMAGE_TYPE_META
+from app.services.requested_content import (
+    normalize_requested_keys,
+    normalize_requested_prompt,
+)
 from app.tasks.image_tasks import run_image_ocr
 from app.utils.pagination import DEFAULT_PAGE_SIZE, build_meta, parse_page
 
@@ -86,6 +90,13 @@ async def create_image_batch(
             f"For documents, use POST /documents.",
         )
 
+    # --- optional user-requested content --------------------------
+    try:
+        requested_keys = normalize_requested_keys(data.keys)
+        requested_prompt = normalize_requested_prompt(data.prompt)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+
     # --- create batch ---------------------------------------------
     batch = await create_batch(
         db,
@@ -110,6 +121,8 @@ async def create_image_batch(
             source_url=file_input.url,
             image_type=image_type,
             status=ImageOCRStatus.PENDING,
+            requested_keys=requested_keys,
+            requested_prompt=requested_prompt,
         )
         db.add(job)
         await db.flush()
@@ -239,6 +252,8 @@ def _job_to_out(job: ImageOCRJob) -> ImageJobOut:
         status=job.status.value if hasattr(job.status, "value") else job.status,
         output=job.output,
         error=job.error,
+        requested_keys=job.requested_keys,
+        requested_prompt=job.requested_prompt,
         cost_estimate=job.cost_estimate,
         ai_calls=job.ai_calls,
         ai_tokens_in=job.ai_tokens_in,
