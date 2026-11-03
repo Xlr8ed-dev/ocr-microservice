@@ -28,6 +28,21 @@ RequestedKey = Annotated[
 
 
 # =========================================================
+# SUPPORTED DOCUMENT TYPES — used by GET /documents/types
+# =========================================================
+
+class DocumentTypeInfo(BaseModel):
+    key: str
+    label: str
+    description: str
+
+
+class DocumentTypeListOut(BaseModel):
+    status: str = "success"
+    data: list[DocumentTypeInfo]
+
+
+# =========================================================
 # BLOCK TYPES
 # =========================================================
 
@@ -92,6 +107,7 @@ class DocumentMetadata(BaseModel):
     page_count: int | None = None
     language: str | None = None
     extraction_method: str | None = None   # pdf_text | pdf_scan | docx | doc | txt
+    document_type: str | None = None       # generic | tender | srs | ...
     chunk_count: int | None = None
     char_count: int | None = None
     processing_time_ms: int | None = None
@@ -119,6 +135,14 @@ class DocumentBatchCreateRequest(BaseModel):
         min_length=1,
         max_length=30,
         description="1 to 30 files. All must be document types.",
+    )
+    document_type: str | None = Field(
+        default=None,
+        description=(
+            "Document profile: generic | tender | srs | specification | "
+            "report | letter | memo | policy | form | proposal. "
+            "Omit or send null for generic."
+        ),
     )
     label: str | None = Field(
         default=None,
@@ -181,6 +205,7 @@ class DocumentJobOut(BaseModel):
 
     requested_keys: list[str] | None = None
     requested_prompt: str | None = None
+    document_type: str | None = None
 
     cost_estimate: float | None = None
 

@@ -21,14 +21,21 @@ from app.models import DocumentOCRJob, DocumentOCRStatus, BatchKind, DocumentFil
 from app.schemas.batch import BatchCreatedResponse, BatchJobItem
 from app.schemas.common import PaginatedResponse
 from app.schemas.document import (
+    DocumentBatchCreateRequest,
     DocumentJobOut,
     DocumentListOut,
-    DocumentOutput, DocumentBatchCreateRequest,
+    DocumentOutput,
+    DocumentTypeInfo,
+    DocumentTypeListOut,
 )
 from app.services.batch_service import create_batch
 from app.services.document_export import (
     render_blocks_as_markdown,
     render_blocks_as_text,
+)
+from app.services.document_prompts import (
+    DOCUMENT_TYPE_META,
+    normalize_document_type,
 )
 from app.services.requested_content import (
     normalize_requested_keys,
@@ -45,6 +52,25 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 # =========================================================
 
 ALLOWED_DOCUMENT_TYPES = {"pdf", "docx", "txt"}
+
+
+# =========================================================
+# TYPES CATALOG (for the FE dropdown)
+# =========================================================
+
+@router.get("/types", response_model=DocumentTypeListOut)
+async def list_document_types() -> DocumentTypeListOut:
+    """Supported document profiles with labels and descriptions."""
+    return DocumentTypeListOut(
+        data=[
+            DocumentTypeInfo(
+                key=key,
+                label=meta["label"],
+                description=meta["description"],
+            )
+            for key, meta in DOCUMENT_TYPE_META.items()
+        ],
+    )
 
 
 # =========================================================
@@ -74,8 +100,9 @@ async def create_document_batch(
             f"For images, use POST /images.",
         )
 
-    # --- optional user-requested content --------------------------
+    # --- validate document_type + optional requested content ------
     try:
+        document_type = normalize_document_type(data.document_type)
         requested_keys = normalize_requested_keys(data.keys)
         requested_prompt = normalize_requested_prompt(data.prompt)
     except ValueError as exc:
@@ -126,7 +153,7 @@ async def create_document_batch(
     # --- dispatch workers -----------------------------------------
     # Dispatch after flush — worker may start immediately and needs the row
     for job_id in job_ids:
-        run_document_ocr.apply_async(args=[job_id])
+        run_document_ocr.apply_async(args=[job_id, document_type])
 
     return BatchCreatedResponse(
         batch_id=batch.id,
@@ -278,6 +305,10 @@ def _job_to_out(job: DocumentOCRJob) -> DocumentJobOut:
             # Log and return raw — better than failing the whole GET
             output = None
 
+    document_type = None
+    if output and output.metadata:
+        document_type = output.metadata.document_type
+
     return DocumentJobOut(
         job_id=job.job_id,
         admin_id=job.admin_id,
@@ -294,6 +325,7 @@ def _job_to_out(job: DocumentOCRJob) -> DocumentJobOut:
         error=job.error,
         requested_keys=job.requested_keys,
         requested_prompt=job.requested_prompt,
+        document_type=document_type,
         cost_estimate=job.cost_estimate,
         ai_calls=job.ai_calls,
         ai_tokens_in=job.ai_tokens_in,

@@ -46,6 +46,10 @@ from app.services.document_extract import (
     extract_document,
 )
 from app.services.document_merge import merge_chunk_results
+from app.services.document_prompts import (
+    DEFAULT_DOCUMENT_TYPE,
+    normalize_document_type,
+)
 from app.services.document_structure import (
     ChunkResult,
     extract_last_block_text,
@@ -78,18 +82,31 @@ COST_PER_PAGE_INR = 1.0  # placeholder billing rate
     retry_jitter=True,
     max_retries=2,
 )
-def run_document_ocr(self, job_id: str) -> dict:
-    return run_async_safely(_do_run_document_ocr, job_id)
+def run_document_ocr(
+    self,
+    job_id: str,
+    document_type: str = DEFAULT_DOCUMENT_TYPE,
+) -> dict:
+    return run_async_safely(_do_run_document_ocr, job_id, document_type)
 
 
 # =========================================================
 # MAIN PIPELINE
 # =========================================================
 
-async def _do_run_document_ocr(job_id: str) -> dict:
+async def _do_run_document_ocr(
+    job_id: str,
+    document_type: str = DEFAULT_DOCUMENT_TYPE,
+) -> dict:
     await clients.startup()
     started = time.monotonic()
     try:
+        # Normalise here too so old/queued task payloads still work.
+        try:
+            document_type = normalize_document_type(document_type)
+        except ValueError:
+            document_type = DEFAULT_DOCUMENT_TYPE
+
         # --- 1. Load job, flip to EXTRACTING ----------------------------
         async with AsyncSessionLocal() as db:
             job = await db.scalar(
@@ -150,6 +167,7 @@ async def _do_run_document_ocr(job_id: str) -> dict:
                 batch_id=batch_id,
                 requested_keys=requested_keys,
                 requested_prompt=requested_prompt,
+                document_type=document_type,
             )
             return {"status": "completed_empty", "job_id": job_id}
 
@@ -182,6 +200,7 @@ async def _do_run_document_ocr(job_id: str) -> dict:
             result = await structure_chunk(
                 chunk,
                 previous_last_block=previous_last_block,
+                document_type=document_type,
                 requested_keys=requested_keys,
                 requested_prompt=requested_prompt,
             )
@@ -222,6 +241,7 @@ async def _do_run_document_ocr(job_id: str) -> dict:
             "extraction_method": extracted.extraction_method,
             "char_count": len(extracted.text),
             "processing_time_ms": elapsed_ms,
+            "document_type": document_type,
         })
 
         output = {
@@ -304,6 +324,7 @@ async def _complete_with_empty(
     *,
     requested_keys: list[str] | None = None,
     requested_prompt: str | None = None,
+    document_type: str = DEFAULT_DOCUMENT_TYPE,
 ) -> None:
     """Mark the job completed with no blocks — happens for empty documents."""
     async with AsyncSessionLocal() as db:
@@ -315,7 +336,11 @@ async def _complete_with_empty(
         output = {
             "title": None,
             "blocks": [],
-            "metadata": {"page_count": page_count, "char_count": 0},
+            "metadata": {
+                "page_count": page_count,
+                "char_count": 0,
+                "document_type": document_type,
+            },
         }
         requested = merge_requested_outputs(
             [],

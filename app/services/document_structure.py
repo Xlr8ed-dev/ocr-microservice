@@ -13,7 +13,7 @@ import httpx
 from app.clients.ai import AIServiceError
 from app.clients.http import clients
 from app.services.document_chunk import Chunk
-from app.services.document_prompts import build_ai_payload
+from app.services.document_prompts import DEFAULT_DOCUMENT_TYPE, build_ai_payload
 from app.services.requested_content import sanitize_requested_output
 
 
@@ -42,6 +42,7 @@ async def structure_chunk(
     chunk: Chunk,
     *,
     previous_last_block: str | None = None,
+    document_type: str = DEFAULT_DOCUMENT_TYPE,
     requested_keys: list[str] | None = None,
     requested_prompt: str | None = None,
 ) -> ChunkResult:
@@ -57,6 +58,7 @@ async def structure_chunk(
         heading_context=chunk.heading_context,
         previous_last_block=previous_last_block,
         chunk_text=chunk.text,
+        document_type=document_type,
         requested_keys=requested_keys,
         requested_prompt=requested_prompt,
     )
