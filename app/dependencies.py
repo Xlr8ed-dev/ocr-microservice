@@ -27,6 +27,9 @@ class CurrentUser:
     last_name: str | None = None
     full_name: str | None = None
     organization_slug: str | None = None
+    # The raw auth-service UUID for this identity. FE echoes it back as
+    # X-User-Id on protected requests.
+    auth_user_id: str | None = None
 
 
 _bearer = HTTPBearer(auto_error=False)
@@ -112,26 +115,42 @@ def _current_user_from_profile(profile) -> CurrentUser:
         last_name=profile.last_name,
         full_name=profile.full_name,
         organization_slug=profile.organization_slug,
+        auth_user_id=str(profile.id),
     )
 
 
 async def _user_from_auth_service(
     request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    x_user_id: str | None = Header(None, alias="X-User-Id"),
     x_device_fingerprint: str | None = Header(
         None, alias=DEVICE_FINGERPRINT_HEADER
     ),
 ) -> CurrentUser:
     """Validate the request via nexby-auth-service.
 
-    Declaring the bearer credential through HTTPBearer (rather than reading the
-    raw header) puts the Authorize button and a padlock on every protected
-    route in Swagger/OpenAPI. Declaring the fingerprint as a Header does the
-    same for that input, so both can be exercised from /docs without special
-    tooling.
+    Three inputs, all shown in the /docs Authorize dialog:
+      - bearer token   -> verified by the auth service;
+      - X-User-Id      -> the user the CALLER claims to be; sent in the POST
+                          payload to /users/verify and checked there against
+                          the token's subject;
+      - X-Device-Fingerprint -> the device binding check.
+
+    The id is never trusted alone; a token issued to someone else 401s even
+    with a matching header. Declaring the inputs through HTTPBearer and Header
+    (rather than reading the raw request) is what puts them in Swagger's
+    Authorize dialog and padlock state.
     """
     if creds is None or not creds.credentials.strip():
         raise _unauthorized("Missing or malformed Authorization header")
+
+    if not x_user_id or not x_user_id.strip():
+        raise _unauthorized("X-User-Id header is required")
+
+    try:
+        claimed_user_id = uuid.UUID(x_user_id.strip())
+    except (ValueError, AttributeError):
+        raise _unauthorized("X-User-Id must be the auth-service user UUID")
 
     if not x_device_fingerprint or not x_device_fingerprint.strip():
         raise _unauthorized(f"{DEVICE_FINGERPRINT_HEADER} header is required")
@@ -140,7 +159,11 @@ async def _user_from_auth_service(
     fingerprint = x_device_fingerprint.strip()
 
     try:
-        profile = await fetch_auth_user(token=token, device_fingerprint=fingerprint)
+        profile = await fetch_auth_user(
+            token=token,
+            user_id=str(claimed_user_id),
+            device_fingerprint=fingerprint,
+        )
     except AuthServiceUnauthorized as exc:
         raise _unauthorized(str(exc)) from exc
     except AuthServiceError as exc:
@@ -150,6 +173,12 @@ async def _user_from_auth_service(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service unavailable",
         ) from exc
+
+    # Defense in depth: the auth service already enforced this; treat a
+    # mismatching response (or a proxy rewriting one) as an authentication
+    # failure rather than resolving the wrong identity.
+    if str(profile.id) != str(claimed_user_id):
+        raise _unauthorized("Invalid or expired token")
 
     user = _current_user_from_profile(profile)
 

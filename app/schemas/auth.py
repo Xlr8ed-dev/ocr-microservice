@@ -17,6 +17,9 @@ class CurrentUserOut(BaseModel):
     last_name: str | None = None
     full_name: str | None = None
     organization_slug: str | None = None
+    # The auth-service user UUID. FE sends it back as the X-User-Id header on
+    # every protected request (it appears in the /docs Authorize dialog).
+    auth_user_id: str | None = None
 
 
 class AuthUserProfile(BaseModel):

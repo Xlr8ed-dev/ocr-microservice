@@ -101,14 +101,20 @@ def test_client_returns_profile_for_valid_token(monkeypatch):
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
+        captured["method"] = request.method
         captured["authorization"] = request.headers.get("Authorization")
         captured["fingerprint"] = request.headers.get("X-Device-Fingerprint")
+        captured["payload"] = request.read().decode()
         return httpx.Response(200, json=_profile().model_dump(mode="json"))
 
     previous = _with_mock_transport(handler)
     try:
         profile = asyncio.run(
-            get_current_user(token="abc", device_fingerprint="device-1")
+            get_current_user(
+                token="abc",
+                user_id=str(USER_ID),
+                device_fingerprint="device-1",
+            )
         )
     finally:
         asyncio.run(clients.auth.aclose())
@@ -117,7 +123,14 @@ def test_client_returns_profile_for_valid_token(monkeypatch):
     assert profile.id == USER_ID
     assert captured["authorization"] == "Bearer abc"
     assert captured["fingerprint"] == "device-1"
-    assert captured["url"].endswith("/api/v1/users/me")
+    assert captured["url"].endswith("/api/v1/users/verify")
+    assert captured["method"] == "POST"
+    import json as _json
+
+    assert (
+        _json.loads(captured["payload"])["user_id"]
+        == str(USER_ID)
+    )
 
 
 def test_client_maps_401_to_unauthorized():
@@ -127,7 +140,11 @@ def test_client_maps_401_to_unauthorized():
     previous = _with_mock_transport(handler)
     try:
         with pytest.raises(AuthServiceUnauthorized):
-            asyncio.run(get_current_user(token="bad", device_fingerprint="d"))
+            asyncio.run(
+                get_current_user(
+                    token="bad", user_id=str(USER_ID), device_fingerprint="d"
+                )
+            )
     finally:
         asyncio.run(clients.auth.aclose())
         clients.auth = previous
@@ -140,7 +157,11 @@ def test_client_maps_5xx_to_service_error():
     previous = _with_mock_transport(handler)
     try:
         with pytest.raises(AuthServiceError):
-            asyncio.run(get_current_user(token="abc", device_fingerprint="d"))
+            asyncio.run(
+                get_current_user(
+                    token="abc", user_id=str(USER_ID), device_fingerprint="d"
+                )
+            )
     finally:
         asyncio.run(clients.auth.aclose())
         clients.auth = previous
@@ -194,7 +215,8 @@ def test_auth_me_requires_device_fingerprint(client):
     previous = _swap_auth_client(handler)
     try:
         response = client.get(
-            "/auth/me", headers={"Authorization": "Bearer token"}
+            "/auth/me",
+            headers={"Authorization": "Bearer token", "X-User-Id": str(USER_ID)},
         )
     finally:
         clients.auth = previous
@@ -203,8 +225,48 @@ def test_auth_me_requires_device_fingerprint(client):
     assert "X-Device-Fingerprint" in response.json()["detail"]
 
 
-def test_auth_me_returns_mapped_user(client):
+def test_auth_me_requires_user_id(client):
     def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("auth service must not be called without a user id")
+
+    previous = _swap_auth_client(handler)
+    try:
+        response = client.get(
+            "/auth/me",
+            headers={"Authorization": "Bearer token", "X-Device-Fingerprint": "device-1"},
+        )
+    finally:
+        clients.auth = previous
+
+    assert response.status_code == 401
+    assert "X-User-Id" in response.json()["detail"]
+
+
+def test_auth_me_rejects_non_uuid_user_id(client):
+    previous = _swap_auth_client(
+        lambda request: httpx.Response(200, json=_profile().model_dump(mode="json"))
+    )
+    try:
+        response = client.get(
+            "/auth/me",
+            headers={
+                "Authorization": "Bearer token",
+                "X-User-Id": "not-a-uuid",
+                "X-Device-Fingerprint": "device-1",
+            },
+        )
+    finally:
+        clients.auth = previous
+
+    assert response.status_code == 401
+
+
+def test_auth_me_sends_user_id_in_payload(client):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["payload"] = request.read().decode()
         return httpx.Response(200, json=_profile(role="admin").model_dump(mode="json"))
 
     previous = _swap_auth_client(handler)
@@ -213,6 +275,57 @@ def test_auth_me_returns_mapped_user(client):
             "/auth/me",
             headers={
                 "Authorization": "Bearer token",
+                "X-User-Id": str(USER_ID),
+                "X-Device-Fingerprint": "device-1",
+            },
+        )
+    finally:
+        clients.auth = previous
+
+    assert response.status_code == 200
+    assert captured["method"] == "POST"
+    import json as _json
+
+    assert _json.loads(captured["payload"])["user_id"] == str(USER_ID)
+
+
+def test_auth_me_rejects_profile_user_mismatch(client):
+    """If the auth service ever answers with a DIFFERENT user than claimed,
+    treat it as an authentication failure rather than resolving the identity."""
+    other_user = uuid.UUID("018f0000-0000-7000-8000-0000000000ff")
+
+    previous = _swap_auth_client(
+        lambda request: httpx.Response(
+            200, json=_profile(id=other_user).model_dump(mode="json")
+        )
+    )
+    try:
+        response = client.get(
+            "/auth/me",
+            headers={
+                "Authorization": "Bearer token",
+                "X-User-Id": str(USER_ID),
+                "X-Device-Fingerprint": "device-1",
+            },
+        )
+    finally:
+        clients.auth = previous
+
+    assert response.status_code == 401
+
+
+def test_auth_me_returns_mapped_user(client):
+    previous = _swap_auth_client(
+        lambda request: httpx.Response(
+            200, json=_profile(role="admin").model_dump(mode="json")
+        )
+    )
+    try:
+        response = client.get(
+            "/auth/me",
+            headers={
+                "Authorization": "Bearer token",
+                "X-User-Id": str(USER_ID),
                 "X-Device-Fingerprint": "device-1",
             },
         )
@@ -225,6 +338,7 @@ def test_auth_me_returns_mapped_user(client):
     assert body["email"] == "person@example.com"
     assert body["organization_slug"] == "acme"
     assert body["admin_id"] == _uuid_to_int(ORG_ID)
+    assert body["auth_user_id"] == str(USER_ID)
 
 
 def test_auth_me_propagates_auth_service_401(client):
@@ -237,6 +351,7 @@ def test_auth_me_propagates_auth_service_401(client):
             "/auth/me",
             headers={
                 "Authorization": "Bearer token",
+                "X-User-Id": str(USER_ID),
                 "X-Device-Fingerprint": "device-1",
             },
         )
@@ -256,6 +371,7 @@ def test_auth_me_fails_closed_when_auth_service_is_down(client):
             "/auth/me",
             headers={
                 "Authorization": "Bearer token",
+                "X-User-Id": str(USER_ID),
                 "X-Device-Fingerprint": "device-1",
             },
         )
@@ -263,3 +379,35 @@ def test_auth_me_fails_closed_when_auth_service_is_down(client):
         clients.auth = previous
 
     assert response.status_code == 503
+
+
+def test_openapi_authorize_dialog_includes_user_id_and_fingerprint():
+    """The /docs Authorize dialog must collect all three credentials."""
+    schema = app.openapi()
+
+    schemes = schema["components"]["securitySchemes"]
+    assert schemes["XUserId"]["in"] == "header"
+    assert schemes["XUserId"]["name"] == "X-User-Id"
+    assert schemes["XDeviceFingerprint"]["name"] == "X-Device-Fingerprint"
+
+    operation = schema["paths"]["/auth/me"]["get"]
+    requirement = operation["security"][0]
+    assert set(requirement) == {"HTTPBearer", "XUserId", "XDeviceFingerprint"}
+
+    # The header inputs are provided through the Authorize dialog, so the
+    # per-endpoint parameter list must not duplicate them.
+    header_names = {
+        parameter["name"]
+        for parameter in operation.get("parameters", [])
+        if parameter.get("in") == "header"
+    }
+    assert "X-User-Id" not in header_names
+    assert "X-Device-Fingerprint" not in header_names
+
+
+def test_openapi_public_routes_are_not_protected_in_schema():
+    schema = app.openapi()
+
+    for path in ("/healthz", "/readyz", "/documents/types", "/images/types"):
+        for method, operation in schema["paths"][path].items():
+            assert not operation.get("security"), f"{method.upper()} {path}"

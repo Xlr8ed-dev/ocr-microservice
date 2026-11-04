@@ -28,4 +28,5 @@ async def get_me(
         last_name=user.last_name,
         full_name=user.full_name,
         organization_slug=user.organization_slug,
+        auth_user_id=user.auth_user_id,
     )
