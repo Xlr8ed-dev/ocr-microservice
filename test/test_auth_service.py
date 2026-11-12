@@ -87,6 +87,45 @@ def test_super_admin_email_overrides_org_role(monkeypatch):
     assert user.admin_id == _uuid_to_int(USER_ID)
 
 
+def _me_payload(
+    *,
+    user_id: uuid.UUID = USER_ID,
+    email: str = "person@example.com",
+    first: str = "Test",
+    last: str = "User",
+    role: str = "owner",
+    organization=...,
+) -> dict:
+    """The nexby-auth-service /users/me envelope, as a plain dict.
+
+    `organization=...` (default sentinel) builds the acme workspace;
+    pass None for a user-scoped token with no workspace.
+    """
+    if organization is ...:
+        organization = {
+            "id": str(ORG_ID),
+            "slug": "acme",
+            "name": "Acme",
+            "role": role,
+        }
+    return {
+        "user": {
+            "id": str(user_id),
+            "email": email,
+            "is_email_verified": False,
+            "is_mobile_verified": False,
+        },
+        "profile": {
+            "first_name": first,
+            "middle_name": "Test",
+            "last_name": last,
+            "full_name": f"{first} Test {last}",
+            "profile_completion_percentage": 25,
+        },
+        "organization": organization,
+    }
+
+
 def _with_mock_transport(handler):
     previous = clients.auth
     clients.auth = httpx.AsyncClient(
@@ -96,15 +135,73 @@ def _with_mock_transport(handler):
     return previous
 
 
-def test_client_returns_profile_for_valid_token(monkeypatch):
+def test_client_returns_profile_for_valid_token():
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
         captured["method"] = request.method
         captured["authorization"] = request.headers.get("Authorization")
+        captured["user_id"] = request.headers.get("X-User-Id")
         captured["fingerprint"] = request.headers.get("X-Device-Fingerprint")
-        captured["payload"] = request.read().decode()
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json=_me_payload())
+
+    previous = _with_mock_transport(handler)
+    try:
+        profile = asyncio.run(
+            get_current_user(
+                token="abc",
+                user_id=str(USER_ID),
+                device_fingerprint="device-1",
+            )
+        )
+    finally:
+        asyncio.run(clients.auth.aclose())
+        clients.auth = previous
+
+    assert profile.id == USER_ID
+    assert profile.first_name == "Test"
+    assert profile.full_name == "Test Test User"
+    assert profile.organization_slug == "acme"
+    assert profile.role == "owner"
+    assert captured["authorization"] == "Bearer abc"
+    assert captured["user_id"] == str(USER_ID)
+    assert captured["fingerprint"] == "device-1"
+    assert captured["url"].endswith("/api/v1/users/me")
+    assert captured["method"] == "GET"
+    assert captured["body"] == ""
+
+
+def test_client_parses_null_organization():
+    """A user-scoped token with no workspace: org fields stay None."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_me_payload(organization=None))
+
+    previous = _with_mock_transport(handler)
+    try:
+        profile = asyncio.run(
+            get_current_user(
+                token="abc",
+                user_id=str(USER_ID),
+                device_fingerprint="device-1",
+            )
+        )
+    finally:
+        asyncio.run(clients.auth.aclose())
+        clients.auth = previous
+
+    assert profile.id == USER_ID
+    assert profile.organization_id is None
+    assert profile.organization_slug is None
+    assert profile.role is None
+
+
+def test_client_accepts_flat_response_too():
+    """Backwards compatibility: a flat profile shape still parses."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_profile().model_dump(mode="json"))
 
     previous = _with_mock_transport(handler)
@@ -121,16 +218,7 @@ def test_client_returns_profile_for_valid_token(monkeypatch):
         clients.auth = previous
 
     assert profile.id == USER_ID
-    assert captured["authorization"] == "Bearer abc"
-    assert captured["fingerprint"] == "device-1"
-    assert captured["url"].endswith("/api/v1/users/verify")
-    assert captured["method"] == "POST"
-    import json as _json
-
-    assert (
-        _json.loads(captured["payload"])["user_id"]
-        == str(USER_ID)
-    )
+    assert profile.role == "owner"
 
 
 def test_client_maps_401_to_unauthorized():
@@ -261,13 +349,13 @@ def test_auth_me_rejects_non_uuid_user_id(client):
     assert response.status_code == 401
 
 
-def test_auth_me_sends_user_id_in_payload(client):
+def test_auth_me_forwards_user_id_header(client):
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["method"] = request.method
-        captured["payload"] = request.read().decode()
-        return httpx.Response(200, json=_profile(role="admin").model_dump(mode="json"))
+        captured["user_id"] = request.headers.get("X-User-Id")
+        return httpx.Response(200, json=_me_payload(role="admin"))
 
     previous = _swap_auth_client(handler)
     try:
@@ -283,10 +371,8 @@ def test_auth_me_sends_user_id_in_payload(client):
         clients.auth = previous
 
     assert response.status_code == 200
-    assert captured["method"] == "POST"
-    import json as _json
-
-    assert _json.loads(captured["payload"])["user_id"] == str(USER_ID)
+    assert captured["method"] == "GET"
+    assert captured["user_id"] == str(USER_ID)
 
 
 def test_auth_me_rejects_profile_user_mismatch(client):
@@ -295,9 +381,7 @@ def test_auth_me_rejects_profile_user_mismatch(client):
     other_user = uuid.UUID("018f0000-0000-7000-8000-0000000000ff")
 
     previous = _swap_auth_client(
-        lambda request: httpx.Response(
-            200, json=_profile(id=other_user).model_dump(mode="json")
-        )
+        lambda request: httpx.Response(200, json=_me_payload(user_id=other_user))
     )
     try:
         response = client.get(
@@ -316,9 +400,7 @@ def test_auth_me_rejects_profile_user_mismatch(client):
 
 def test_auth_me_returns_mapped_user(client):
     previous = _swap_auth_client(
-        lambda request: httpx.Response(
-            200, json=_profile(role="admin").model_dump(mode="json")
-        )
+        lambda request: httpx.Response(200, json=_me_payload(role="admin"))
     )
     try:
         response = client.get(

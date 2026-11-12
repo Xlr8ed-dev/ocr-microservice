@@ -1,10 +1,15 @@
 """Client for nexby-auth-service.
 
 This service never decodes or trusts a token by itself. It forwards the
-caller's bearer token, the claimed user_id and X-Device-Fingerprint to the
-auth service's `POST /api/v1/users/verify`, which verifies the signature,
-checks revocation, enforces the device binding AND confirms the token was
-issued to the claimed user, then returns the profile plus workspace context.
+caller's bearer token and X-Device-Fingerprint to the auth service's
+`GET /api/v1/users/me`, which verifies the signature, checks revocation and
+enforces the device binding, then returns the profile plus workspace context
+as an envelope: {"user": ..., "profile": ..., "organization": ...}.
+
+The claimed user_id (X-User-Id header) is forwarded to the auth service and
+ALSO cross-checked locally against the response: a profile that names a
+different user than the caller claimed is treated as an authentication
+failure, never silently accepted.
 
 That keeps token state in ONE place: rotating the signing key, revoking a
 session or changing a role takes effect here on the next request with no
@@ -17,7 +22,11 @@ import httpx
 
 from app.clients.http import clients
 from app.config import settings
-from app.schemas.auth import AuthUserProfile
+from app.schemas.auth import (
+    AuthUserProfile,
+    AuthUserMeResponse,
+    auth_me_to_profile,
+)
 
 
 class AuthServiceError(Exception):
@@ -44,9 +53,8 @@ async def get_current_user(
     """Resolve a request's bearer token + claimed user_id to a profile.
 
     `user_id` is what the CALLER claims (sent by the FE as X-User-Id). It is
-    never trusted on its own: the auth service compares it with the subject of
-    the verified token and 403s a mismatch, which surfaces here as
-    AuthServiceUnauthorized.
+    forwarded to the auth service and cross-checked here against the returned
+    profile: a response naming a different user is an authentication failure.
 
     The auth service owns every other decision: signature, expiry, token
     type, revocation and device binding. A 401/403 from it is a 401 here. A
@@ -55,14 +63,14 @@ async def get_current_user(
     # Relative path merged onto the base_url the client was built with
     # (AUTH_SERVICE_URL), so a changed base URL needs no code change and an
     # unset AUTH_SERVICE_URL cannot produce a broken "None/..." URL.
-    path = f"{settings.AUTH_SERVICE_URL}{settings.auth_service_root}/users/profile-completion"
+    path = f"{settings.auth_service_root}/users/me"
 
     try:
-        response = await _client().post(
+        response = await _client().get(
             path,
-            json={"user_id": user_id},
             headers={
                 "Authorization": f"Bearer {token}",
+                "X-User-Id": user_id,
                 "X-Device-Fingerprint": device_fingerprint,
                 "Accept": "application/json",
             },
@@ -98,6 +106,13 @@ async def get_current_user(
         raise AuthServiceError("Invalid response from the auth service")
 
     try:
+        if "user" in payload:
+            # The team's envelope shape:
+            # {"user": {...}, "profile": {...}, "organization": {...}|null}
+            me = AuthUserMeResponse.model_validate(payload)
+            return auth_me_to_profile(me)
+        # Flat shape (kept for backwards compatibility with /users/verify
+        # style responses).
         return AuthUserProfile.model_validate(payload)
     except Exception as exc:  # pydantic ValidationError, kept dependency-free
         raise AuthServiceError(
