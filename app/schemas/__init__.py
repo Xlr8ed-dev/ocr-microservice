@@ -9,7 +9,8 @@ from app.schemas.common import (
 )
 from app.schemas.auth import CurrentUserOut
 from app.schemas.document import Block, DocumentJobOut, DocumentListOut, \
-    DocumentMetadata, DocumentOutput, HeadingBlock, ParagraphBlock, ListBlock, TableBlock, PageBreakBlock, ImageBlock
+    DocumentMetadata, DocumentOutput, DocumentTypeInfo, DocumentTypeListOut, \
+    HeadingBlock, ParagraphBlock, ListBlock, TableBlock, PageBreakBlock, ImageBlock
 from app.schemas.event import EventCreate, EventOut, EventUpdate
 from app.schemas.extraction import ExtractionListItem, ExtractionOut, \
     ExtractionResultField, ExtractionFieldEdit, ExtractionPatchRequest
@@ -93,6 +94,8 @@ __all__ = [
     "DocumentListOut",
     "DocumentMetadata",
     "DocumentOutput",
+    "DocumentTypeInfo",
+    "DocumentTypeListOut",
     "HeadingBlock",
     "ParagraphBlock",
     "ListBlock",

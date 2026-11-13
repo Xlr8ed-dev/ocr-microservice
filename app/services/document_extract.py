@@ -24,6 +24,7 @@ from docx import Document as DocxDocument
 from PIL import Image
 
 from app.config import settings
+from app.services.s3_service import normalize_download_url
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,8 @@ async def extract_document(url: str) -> ExtractedText:
 
 async def _download_to_temp(url: str) -> tuple[str, int]:
     """Stream the file to a temp file. Returns (path, size_bytes)."""
+    # Sign the URL if it's our private bucket
+    url = normalize_download_url(url)
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".bin")
     tmp_path = tmp.name
     tmp.close()

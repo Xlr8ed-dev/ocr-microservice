@@ -13,6 +13,7 @@ We also decide the document title:
 import logging
 
 from app.services.document_structure import ChunkResult
+from app.services.requested_content import merge_requested_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -21,18 +22,33 @@ logger = logging.getLogger(__name__)
 # PUBLIC ENTRY POINT
 # =========================================================
 
-def merge_chunk_results(results: list[ChunkResult]) -> dict:
+def merge_chunk_results(
+    results: list[ChunkResult],
+    *,
+    requested_keys: list[str] | None = None,
+    requested_prompt: str | None = None,
+) -> dict:
     """Merge chunk results into one final output dict.
 
     Returns:
         {
           "title": str | None,
           "blocks": [ ... ],
+          "requested": { ... } | None,
           "metadata": { chunk_count: int },
         }
     """
     if not results:
-        return {"title": None, "blocks": [], "metadata": {"chunk_count": 0}}
+        return {
+            "title": None,
+            "blocks": [],
+            "requested": merge_requested_outputs(
+                [],
+                keys=requested_keys,
+                prompt=requested_prompt,
+            ),
+            "metadata": {"chunk_count": 0},
+        }
 
     # Sort by chunk index to be safe
     results = sorted(results, key=lambda r: r.chunk_index)
@@ -64,9 +80,16 @@ def merge_chunk_results(results: list[ChunkResult]) -> dict:
         if first_heading:
             title = first_heading.get("text", "").strip() or None
 
+    requested = merge_requested_outputs(
+        [r.requested for r in results],
+        keys=requested_keys,
+        prompt=requested_prompt,
+    )
+
     return {
         "title": title,
         "blocks": merged_blocks,
+        "requested": requested,
         "metadata": {"chunk_count": len(results)},
     }
 
