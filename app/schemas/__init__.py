@@ -7,7 +7,7 @@ from app.schemas.common import (
     PaginationMeta,
     StatusResponse,
 )
-from app.schemas.auth import CurrentUserOut
+from app.schemas.auth import AuthUserProfile, CurrentUserOut
 from app.schemas.document import Block, DocumentJobOut, DocumentListOut, \
     DocumentMetadata, DocumentOutput, DocumentTypeInfo, DocumentTypeListOut, \
     HeadingBlock, ParagraphBlock, ListBlock, TableBlock, PageBreakBlock, ImageBlock
@@ -57,6 +57,7 @@ __all__ = [
     "PaginationMeta",
     "StatusResponse",
     # auth
+    "AuthUserProfile",
     "CurrentUserOut",
     # event
     "EventCreate",

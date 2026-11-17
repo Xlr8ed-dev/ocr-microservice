@@ -27,6 +27,24 @@ class Settings(BaseSettings):
     SSO_SERVICE_TOKEN: str
     SSO_TIMEOUT: float = 5.0
 
+    # --- Central auth service (nexby-auth-service) -----------------
+    # Base URL of the auth service, WITHOUT a trailing slash. On QA this is
+    # https://qa-apis.nexby.ai/auth -- the API itself is under /api/v1.
+    # Falls back to SSO_BASE_URL when unset, so an older deployment keeps
+    # working unchanged.
+    AUTH_SERVICE_URL: str | None = None
+    AUTH_SERVICE_TIMEOUT: float = 5.0
+    AUTH_SERVICE_API_PREFIX: str = "/api/v1"
+
+    # Emails that should get SUPER_ADMIN access in this service. Comma
+    # separated, case-insensitive. Everyone else is mapped from their
+    # organization role: owner/admin -> ADMIN, member -> AGENT.
+    SUPER_ADMIN_EMAILS: str = ""
+
+    # Salt for the stable integer IDs derived from auth-service UUIDs. Keep
+    # the same value on every instance; changing it remaps all stored rows.
+    AUTH_ID_HASH_SALT: str = ""
+
     # --- AI service (vision, STT, summarize) ----------------------
     AI_SERVICE_URL: str
     AI_SERVICE_API_KEY: str
@@ -88,6 +106,25 @@ class Settings(BaseSettings):
             f"@{self.DATABASE_HOST}:{self.DATABASE_PORT}/"
             f"{self.DATABASE_NAME}"
         )
+
+    @property
+    def auth_service_base_url(self) -> str:
+        return (self.AUTH_SERVICE_URL or self.SSO_BASE_URL).rstrip("/")
+
+    @property
+    def auth_service_root(self) -> str:
+        prefix = self.AUTH_SERVICE_API_PREFIX.strip()
+        if prefix and not prefix.startswith("/"):
+            prefix = "/" + prefix
+        return prefix.rstrip("/")
+
+    @property
+    def super_admin_emails(self) -> set[str]:
+        return {
+            email.strip().lower()
+            for email in self.SUPER_ADMIN_EMAILS.split(",")
+            if email.strip()
+        }
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
