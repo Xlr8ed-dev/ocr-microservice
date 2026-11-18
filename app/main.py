@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.admin import setup_admin
@@ -38,6 +39,34 @@ app.add_middleware(
     session_cookie="ocr_admin_session",
     max_age=3600,
 )
+
+# --- CORS --------------------------------------------------------------
+# The FE runs on a different origin (localhost:3000 in dev, the QA/prod web
+# app otherwise), so every browser call needs an Access-Control-Allow-Origin
+# header. The allow-list comes from CORS_ALLOWED_ORIGINS in .env; leaving it
+# empty disables this middleware instead of accidentally opening the API.
+#
+# allow_headers="*" echoes whatever the preflight asks for, which covers the
+# three credentials the FE must send (Authorization, X-User-Id,
+# X-Device-Fingerprint) without having to keep a second list in sync.
+#
+# expose_headers matters for the export endpoints: without it the browser
+# cannot read Content-Disposition and cannot name the downloaded file.
+_cors_origins = settings.cors_allowed_origins
+if _cors_origins:
+    _allow_any_origin = "*" in _cors_origins
+    app.add_middleware(
+        CORSMiddleware,
+        # Per the CORS spec a wildcard origin cannot be combined with
+        # credentials, so "*" switches credentials off rather than producing
+        # a header combination browsers reject.
+        allow_origins=["*"] if _allow_any_origin else _cors_origins,
+        allow_credentials=not _allow_any_origin,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["Content-Disposition", "Content-Length"],
+        max_age=600,
+    )
 
 
 # --- Authorize dialog: bearer + user_id + device fingerprint ----------
