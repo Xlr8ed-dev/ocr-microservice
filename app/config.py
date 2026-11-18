@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from pydantic import model_validator
@@ -6,6 +7,44 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = BASE_DIR / ".env"
+
+
+def parse_allowed_origins(raw: str | None) -> list[str]:
+    """Turn the CORS_ALLOWED_ORIGINS setting into a clean origin list.
+
+    Two forms are accepted so an operator can use whichever is convenient:
+
+        CORS_ALLOWED_ORIGINS=["https://qa-apis.nexby.ai","http://localhost:3000"]
+        CORS_ALLOWED_ORIGINS=https://qa-apis.nexby.ai,http://localhost:3000
+
+    Origins are normalised the way browsers report them: quotes and spaces
+    removed, no trailing slash (an origin never has one, and a trailing slash
+    in this list silently fails to match every real Origin header).
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+
+    if raw.startswith("["):
+        try:
+            values = json.loads(raw)
+        except ValueError:
+            # A JSON-looking but malformed value should not take the whole
+            # service down: fall back to the comma-separated interpretation.
+            values = raw.strip("[]").split(",")
+    else:
+        values = raw.split(",")
+
+    if not isinstance(values, list):
+        return []
+
+    origins: list[str] = []
+    for value in values:
+        origin = str(value).strip().strip("\"'").strip().rstrip("/")
+        if origin and origin not in origins:
+            origins.append(origin)
+    return origins
+
 
 
 class Settings(BaseSettings):
@@ -89,6 +128,13 @@ class Settings(BaseSettings):
     S3_PRESIGN_EXPIRES_SECONDS: int = 3600
     S3_UPLOAD_MAX_MB: int = 50
 
+    # --- CORS -----------------------------------------------------
+    # Browser origins allowed to call this API. Accepts either a JSON array
+    # (["https://a", "https://b"]) or a comma-separated list (https://a,https://b).
+    # An empty value disables the CORS middleware entirely. Use "*" to allow
+    # any origin (credentials are then disabled, per the CORS spec).
+    CORS_ALLOWED_ORIGINS: str = ""
+
     @model_validator(mode="after")
     def _check_auth_mode(self):
         if self.ENVIRONMENT == "production" and self.AUTH_MODE == "mock":
@@ -125,6 +171,10 @@ class Settings(BaseSettings):
             for email in self.SUPER_ADMIN_EMAILS.split(",")
             if email.strip()
         }
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        return parse_allowed_origins(self.CORS_ALLOWED_ORIGINS)
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
