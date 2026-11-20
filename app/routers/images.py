@@ -156,7 +156,7 @@ async def get_image_job(
         db: AsyncSession = Depends(get_db),
 ) -> ImageJobOut:
     job = await _get_job_scoped(db, job_id, user)
-    return _job_to_out(job)
+    return job_to_out(job)
 
 
 # =========================================================
@@ -242,7 +242,7 @@ async def _get_job_scoped(
     return job
 
 
-def _job_to_out(job: ImageOCRJob) -> ImageJobOut:
+def job_to_out(job: ImageOCRJob) -> ImageJobOut:
     return ImageJobOut(
         job_id=job.job_id,
         admin_id=job.admin_id,

@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from app.clients.ai import AIServiceError
+from app.clients.ai import AIServiceError, unwrap_ai_response
 from app.clients.http import clients
 from app.services.document_chunk import Chunk
 from app.services.document_prompts import DEFAULT_DOCUMENT_TYPE, build_ai_payload
@@ -67,7 +67,7 @@ async def structure_chunk(
 
     try:
         response = await clients.ai.post(
-            "api/v1/chat/completion",
+            "api/v1/chat/completions",
             json=payload,
         )
         response.raise_for_status()
@@ -93,22 +93,24 @@ async def structure_chunk(
     if not isinstance(raw, dict):
         raise AIServiceError("AI response is not an object")
 
-    data = raw.get("data", raw)
-    if not isinstance(data, dict):
-        raise AIServiceError("AI data field is not an object")
+    # The service wraps schema output as data.structured_output; older
+    # deployments returned the fields at the top level. `payload` is whichever
+    # of the two this response actually used.
+    envelope, structured, usage = unwrap_ai_response(raw)
+    payload = structured if structured is not None else envelope
 
-    blocks = data.get("blocks", [])
+    blocks = payload.get("blocks", [])
     if not isinstance(blocks, list):
         raise AIServiceError("AI blocks field is not a list")
 
-    title = data.get("title") if isinstance(data.get("title"), str) else None
+    title = payload.get("title") if isinstance(payload.get("title"), str) else None
 
     # Attach page numbers from the chunk's page range if the model
     # omitted them. The AI doesn't always know exact pages; we help it.
     blocks = _fill_missing_pages(blocks, chunk.start_page)
 
     requested = sanitize_requested_output(
-        data.get("requested"),
+        payload.get("requested"),
         keys=requested_keys,
         prompt=requested_prompt,
     )
@@ -118,7 +120,7 @@ async def structure_chunk(
         blocks=blocks,
         title=title,
         requested=requested,
-        usage=raw.get("usage") or {},
+        usage=usage,
         raw_response=raw,
     )
 

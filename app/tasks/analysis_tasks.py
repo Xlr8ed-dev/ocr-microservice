@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 import httpx
 from sqlalchemy import select
 
-from app.clients.ai import AIServiceError
+from app.clients.ai import AIServiceError, unwrap_ai_response
 from app.clients.http import clients
 from app.database import AsyncSessionLocal
 from app.models import (
@@ -129,8 +129,8 @@ async def _do_run_document_analysis(analysis_id: str) -> dict:
             await _fail_document(analysis_id, str(exc)[:2000])
             raise
 
-        data = raw.get("data", raw) if isinstance(raw, dict) else {}
-        usage = raw.get("usage") or {} if isinstance(raw, dict) else {}
+        envelope, structured, usage = unwrap_ai_response(raw)
+        data = structured if structured is not None else envelope
 
         if not isinstance(data, dict):
             await _fail_document(analysis_id, "AI returned unexpected shape")
@@ -254,8 +254,8 @@ async def _do_run_image_analysis(analysis_id: str) -> dict:
             await _fail_image(analysis_id, str(exc)[:2000])
             raise
 
-        data = raw.get("data", raw) if isinstance(raw, dict) else {}
-        usage = raw.get("usage") or {} if isinstance(raw, dict) else {}
+        envelope, structured, usage = unwrap_ai_response(raw)
+        data = structured if structured is not None else envelope
 
         if not isinstance(data, dict):
             await _fail_image(analysis_id, "AI returned unexpected shape")
@@ -301,11 +301,11 @@ async def _do_run_image_analysis(analysis_id: str) -> dict:
 # =========================================================
 
 async def _post_ai(payload: dict) -> dict:
-    """Post to /api/v1/chat/completion and return the parsed JSON."""
+    """Post to /api/v1/chat/completions and return the parsed JSON."""
     assert clients.ai is not None, "AI client not initialised"
     try:
         response = await clients.ai.post(
-            "api/v1/chat/completion",
+            "api/v1/chat/completions",
             json=payload,
         )
         response.raise_for_status()

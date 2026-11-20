@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.clients.ai import AIServiceError
+from app.clients.ai import AIServiceError, unwrap_ai_response
 from app.clients.http import clients
 from app.database import AsyncSessionLocal
 from app.models import (
@@ -190,8 +190,8 @@ async def _run_image_path(
         await _fail(extraction_id, str(exc)[:2000])
         raise
 
-    data = raw.get("data", raw) if isinstance(raw, dict) else {}
-    usage = raw.get("usage") or {} if isinstance(raw, dict) else {}
+    envelope, structured, usage = unwrap_ai_response(raw)
+    data = structured if structured is not None else envelope
 
     result = parse_extraction_result(data, fields)
     await _finalize(extraction_id, batch_id, result, fields, usage)
@@ -276,13 +276,13 @@ async def _run_document_path(
     )
 
     try:
-        raw = await _post_ai("api/v1/chat/completion", payload)
+        raw = await _post_ai("api/v1/chat/completions", payload)
     except AIServiceError as exc:
         await _fail(extraction_id, str(exc)[:2000])
         raise
 
-    data = raw.get("data", raw) if isinstance(raw, dict) else {}
-    usage = raw.get("usage") or {} if isinstance(raw, dict) else {}
+    envelope, structured, usage = unwrap_ai_response(raw)
+    data = structured if structured is not None else envelope
 
     ai_calls += 1
     ai_tokens_in += int(usage.get("prompt_tokens", 0) or 0)

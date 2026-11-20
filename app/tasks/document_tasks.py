@@ -197,13 +197,19 @@ async def _do_run_document_ocr(
                 "document task chunk=%d/%d job=%s",
                 chunk.chunk_index + 1, chunk.chunk_total, job_id,
             )
-            result = await structure_chunk(
-                chunk,
-                previous_last_block=previous_last_block,
-                document_type=document_type,
-                requested_keys=requested_keys,
-                requested_prompt=requested_prompt,
-            )
+            try:
+                result = await structure_chunk(
+                    chunk,
+                    previous_last_block=previous_last_block,
+                    document_type=document_type,
+                    requested_keys=requested_keys,
+                    requested_prompt=requested_prompt,
+                )
+            except AIServiceError as exc:
+                # Without this the job would sit in `structuring` forever and
+                # the FE would poll a row whose error is null.
+                await _fail(job_id, str(exc)[:2000])
+                raise
             results.append(result)
 
             # Accumulate usage (may all be zero if AI omits usage)
