@@ -46,6 +46,58 @@ class AIServiceError(Exception):
 
 
 # =========================================================
+# RESPONSE ENVELOPE
+# =========================================================
+
+def unwrap_ai_response(
+    raw: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any]]:
+    """Normalise the AI service response into (envelope, structured, usage).
+
+    The service answers:
+
+        {"success": true, "data": {...}, "error": null}
+
+    and puts schema-constrained output under `data["structured_output"]`.
+    Some endpoints (and older deployments) return the envelope bare, so both
+    shapes are accepted.
+
+    Returns:
+        envelope   -- the `data` object (or the whole response if bare);
+        structured -- `data.structured_output` when present, else None;
+        usage      -- the token accounting (`token_usage`, falling back to
+                      `usage`) so callers stop reading a key that never exists.
+
+    Raises AIServiceError when the service explicitly reports `success: false`.
+    """
+    if not isinstance(raw, dict):
+        return {}, None, {}
+
+    if raw.get("success") is False:
+        error = raw.get("error")
+        message = error.get("message") if isinstance(error, dict) else error
+        raise AIServiceError(
+            f"AI service reported failure: {message or 'unknown error'}"
+        )
+
+    data = raw.get("data")
+    envelope = data if isinstance(data, dict) else raw
+
+    structured = envelope.get("structured_output")
+    if not isinstance(structured, dict):
+        structured = None
+
+    usage = (
+        envelope.get("token_usage")
+        or envelope.get("usage")
+        or raw.get("token_usage")
+        or raw.get("usage")
+        or {}
+    )
+    return envelope, structured, usage if isinstance(usage, dict) else {}
+
+
+# =========================================================
 # PAYLOAD BUILDER (unchanged behaviour)
 # =========================================================
 
@@ -270,7 +322,7 @@ async def summarize_notes(
     payload = build_summary_payload(notes=notes, context=context)
 
     try:
-        response = await clients.ai.post("api/v1/chat/completion", json=payload)
+        response = await clients.ai.post("api/v1/chat/completions", json=payload)
         response.raise_for_status()
     except httpx.TimeoutException as exc:
         raise AIServiceError("Summarize request timed out") from exc
@@ -290,12 +342,11 @@ async def summarize_notes(
     if not isinstance(result, dict):
         raise AIServiceError("Invalid response from AI service")
 
-    data = result.get("data", result)
-    if not isinstance(data, dict):
-        raise AIServiceError("Invalid summarize response shape")
+    envelope, structured, usage = unwrap_ai_response(result)
+    data = structured if structured is not None else envelope
 
     return {
         "notes_summarize": data.get("notes_summarize") or "",
         "email_notes_summarize": data.get("email_notes_summarize") or "",
-        "usage": result.get("usage") or {},
+        "usage": usage,
     }

@@ -173,7 +173,7 @@ async def get_document_job(
         db: AsyncSession = Depends(get_db),
 ) -> DocumentJobOut:
     job = await _get_job_scoped(db, job_id, user)
-    return _job_to_out(job)
+    return job_to_out(job)
 
 
 # =========================================================
@@ -293,7 +293,7 @@ async def _get_job_scoped(
     return job
 
 
-def _job_to_out(job: DocumentOCRJob) -> DocumentJobOut:
+def job_to_out(job: DocumentOCRJob) -> DocumentJobOut:
     """Convert model → schema. Ensures `output` is validated as DocumentOutput
     when present, so malformed block data from a bad AI response is caught
     at serialization rather than silently returned."""

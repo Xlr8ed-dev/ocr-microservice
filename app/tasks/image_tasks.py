@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.clients.ai import AIServiceError, vision_ocr
+from app.clients.ai import AIServiceError, unwrap_ai_response, vision_ocr
 from app.clients.http import clients
 from app.database import AsyncSessionLocal
 from app.models import ImageOCRJob, ImageOCRStatus
@@ -92,10 +92,8 @@ async def _do_run_image_ocr(job_id: str) -> dict:
             raise
 
         # Extract output — support both {data: {...}} and bare {..}
-        data = raw.get("data", raw) if isinstance(raw, dict) else {}
-        usage = raw.get("usage") or {} if isinstance(raw, dict) else {}
-
-        output = data if isinstance(data, dict) else {"raw": data}
+        envelope, _structured, usage = unwrap_ai_response(raw)
+        output = envelope if isinstance(envelope, dict) else {"raw": raw}
         requested = sanitize_requested_output(
             output.get("requested"),
             keys=requested_keys,
